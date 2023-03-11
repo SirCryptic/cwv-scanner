@@ -132,4 +132,4 @@ To use the tool, simply enter the URL or IP address of the target webapplication
 The tool requires PHP and cURL to be installed on the server in order to work properly.
 
 ## FootNotes 
-- This is also in my [Basic-Websites-Portfolio](https://github.com/SirCryptic/Basic-Websites-Portfolio) Repo
+- This is also in my [Basic-Websites-Portfolio](https://sircryptic.github.io/Basic-Websites-Portfolio) [Repo](https://github.com/SirCryptic/Basic-Websites-Portfolio)
