@@ -1,4 +1,4 @@
-# Web Application Vulnerability Scanner [[Demo]](https://nst-dev.000webhostapp.com/tools/scanner.php)
+# Web Application Vulnerability Scanner [[Web Based Demo]](https://nst-dev.000webhostapp.com/tools/scanner.php)
 This is a simple web application vulnerability scanner that checks if a given URL or IP address is vulnerable to common web application security vulnerabilities. The tool is designed to help website owners and security researchers identify vulnerabilities in their web applications that can be exploited by attackers.
 
 ## How it works
@@ -57,4 +57,6 @@ To use the tool, simply enter the URL or IP address of the target webapplication
 The tool requires PHP and cURL to be installed on the server in order to work properly.
 
 ## FootNotes 
-- This is also in my [Basic-Websites-Portfolio](https://sircryptic.github.io/Basic-Websites-Portfolio) [Repo](https://github.com/SirCryptic/Basic-Websites-Portfolio)
+- This is also in my [Basic-Websites-Portfolio](https://sircryptic.github.io/Basic-Websites-Portfolio) [Repo](https://github.com/SirCryptic/Basic-Websites-Portfolio)   
+
+- bash version soon to come
