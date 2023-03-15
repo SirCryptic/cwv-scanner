@@ -11,7 +11,7 @@
     <a href="https://github.com/sircryptic/cwv-scanner/network"><img src="https://img.shields.io/github/forks/sircryptic/cwv-scanner.svg" alt="GitHub forks"></a>
     <a href="https://github.com/sircryptic/cwv-scanner/watchers"><img src="https://img.shields.io/github/watchers/sircryptic/cwv-scanner.svg?style=social" alt="GitHub watchers"></a>
     <br>
-    <a href="https://github.com/sircryptic/cwv-scanner/blob/main/LICENSE.md"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License"></a>
+    <a href="https://github.com/SirCryptic/cwv-scanner/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License"></a>
 </div>
 
 This is a simple web application vulnerability scanner that checks if a given URL or IP address is vulnerable to common web application security vulnerabilities. The tool is designed to help website owners and security researchers identify vulnerabilities in their web applications that can be exploited by attackers.
