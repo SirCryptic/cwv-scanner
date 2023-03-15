@@ -71,8 +71,9 @@ To use the tool type `bash scan.sh` , simply enter the URL or IP address of the 
 
 <h2> Credits </h2>
 
-<p> ⭐ [SirCryptic](https://github.com/sircryptic), [cwvs - Version: 0.1 BETA](https://github.com/sircryptic/cwv-scanner)</p>
+- ⭐ [SirCryptic](https://github.com/sircryptic), [cwvs - Version: 0.1 BETA](https://github.com/sircryptic/cwv-scanner)
 
+## FootNote/s
 - There is also a web based version in my [Basic-Websites-Portfolio](https://sircryptic.github.io/Basic-Websites-Portfolio) [Repo](https://github.com/SirCryptic/Basic-Websites-Portfolio) , This will also probably be likely incorperated into [phisherprice](https://github.com/sircryptic/phisherprice) at some point too.
 
 - Results cannot be 100% Gaurenteed
