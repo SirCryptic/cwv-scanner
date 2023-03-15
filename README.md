@@ -16,6 +16,12 @@
 
 This is a simple web application vulnerability scanner that checks if a given URL or IP address is vulnerable to common web application security vulnerabilities. The tool is designed to help website owners and security researchers identify vulnerabilities in their web applications that can be exploited by attackers.
 
+## Preview
+
+<p>
+    <img width="300" src="https://user-images.githubusercontent.com/48811414/225269122-4978b2e1-aa8c-4658-8050-bba073d3148d.gif" alt="Null Security Team">
+</p>
+
 ## How it works
 The scanner uses regular expressions to search for common web application vulnerabilities in the HTML code of the target website. If a vulnerability is found, the tool displays a table of results indicating if it is vulnerable and to which vunlrabilties.
 
