@@ -1,5 +1,6 @@
-# Web Application Vulnerability Scanner [Bash Version]
-
+<p align="center">
+    <img width="300" src="https://user-images.githubusercontent.com/48811414/225269122-4978b2e1-aa8c-4658-8050-bba073d3148d.gif" alt="Null Security Team">
+</p>
 <div align="center">
   <img src="https://user-images.githubusercontent.com/48811414/86414182-29896d80-bcbb-11ea-9b0b-de6b57eb583d.png">
   <img src="https://user-images.githubusercontent.com/48811414/86414184-2a220400-bcbb-11ea-89a8-89890f2e3775.png">
@@ -13,16 +14,11 @@
     <br>
     <a href="https://github.com/SirCryptic/cwv-scanner/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License"></a>
 </div>
+<h3 align="center">Web Application Vulnerability Scanner. [Bash Version]</h3>
 
 This is a simple web application vulnerability scanner that checks if a given URL or IP address is vulnerable to common web application security vulnerabilities. The tool is designed to help website owners and security researchers identify vulnerabilities in their web applications that can be exploited by attackers.
 
-## Preview
-
-<p>
-    <img width="300" src="https://user-images.githubusercontent.com/48811414/225269122-4978b2e1-aa8c-4658-8050-bba073d3148d.gif" alt="Null Security Team">
-</p>
-
-## How it works
+<h3 align="center">How it works</h3>
 The scanner uses regular expressions to search for common web application vulnerabilities in the HTML code of the target website. If a vulnerability is found, the tool displays a table of results indicating if it is vulnerable and to which vunlrabilties.
 
 ## The scanner checks for the following 37 vulnerabilities:
