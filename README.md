@@ -1,10 +1,25 @@
-# Web Application Vulnerability Scanner [[Web Based Demo]](https://nst-dev.000webhostapp.com/tools/scanner.php)
+# Web Application Vulnerability Scanner [Bash Version]
+
+<div align="center">
+  <img src="https://user-images.githubusercontent.com/48811414/86414182-29896d80-bcbb-11ea-9b0b-de6b57eb583d.png">
+  <img src="https://user-images.githubusercontent.com/48811414/86414184-2a220400-bcbb-11ea-89a8-89890f2e3775.png">
+</div>
+
+<div align="center">
+    <a href="https://github.com/sircryptic/cwv-scanner/stargazers"><img 
+    src="https://img.shields.io/github/stars/sircryptic/cwv-scanner.svg" alt="GitHub stars"></a>
+    <a href="https://github.com/sircryptic/cwv-scanner/network"><img src="https://img.shields.io/github/forks/sircryptic/cwv-scanner.svg" alt="GitHub forks"></a>
+    <a href="https://github.com/sircryptic/cwv-scanner/watchers"><img src="https://img.shields.io/github/watchers/sircryptic/cwv-scanner.svg?style=social" alt="GitHub watchers"></a>
+    <br>
+    <a href="https://github.com/sircryptic/cwv-scanner/blob/main/LICENSE.md"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License"></a>
+</div>
+
 This is a simple web application vulnerability scanner that checks if a given URL or IP address is vulnerable to common web application security vulnerabilities. The tool is designed to help website owners and security researchers identify vulnerabilities in their web applications that can be exploited by attackers.
 
 ## How it works
 The scanner uses regular expressions to search for common web application vulnerabilities in the HTML code of the target website. If a vulnerability is found, the tool displays a table of results indicating if it is vulnerable and to which vunlrabilties.
 
-## The scanner checks for the following 36 vulnerabilities:
+## The scanner checks for the following 37 vulnerabilities:
 
 | Vulnerability             | Description |
 |---------------------------|-------------|
@@ -49,14 +64,15 @@ The scanner uses regular expressions to search for common web application vulner
 | Clickjacking                       | An attack where an attacker tricks a user into clicking on a button or link that is disguised as something else, such as a harmless button, but actually performs a malicious action.                           |
 | Hidden Form Fields                 | This is a type of vulnerability where a form field is hidden from the user, but still included in the form submission. This can allow attackers to submit unexpected data, potentially bypassing form validation or performing other malicious actions. |
 | Object Injection                   | This occurs when an attacker can manipulate serialized objects in a web application to execute arbitrary code.    
+| Shellshock             | Shellshock is a security vulnerability in the Unix Bash shell that was discovered in 2014. It allows an attacker to execute arbitrary code on a target system by exploiting a flaw in how Bash evaluates environment variables. The vulnerability affects many versions of Bash on Unix-based operating systems, including Linux and Mac OS X. It can be used to launch a variety of attacks, including remote code execution, privilege escalation, and data theft. The vulnerability has been patched, but it remains a risk for systems that have not been updated. |
 
 ## How to use
-To use the tool, simply enter the URL or IP address of the target webapplication in the input field and click the "Scan" button. The scanner will then check for vulnerabilities in the target webapplication and display a results table indicating what vulnrabilities are found with `vulnrable` or `not vulnrable` if any.
+To use the tool type `bash scan.sh` , simply enter the URL or IP address of the target webapplication in the input field and press enter. The scanner will then check for vulnerabilities in the target webapplication and display a results table indicating what vulnrabilities are found with `vulnrable` or `not vulnrable` if any are found.
 
-## Requirements
-The tool requires PHP and cURL to be installed on the server in order to work properly.
+<h2> Credits </h2>
 
-## FootNotes 
-- This is also in my [Basic-Websites-Portfolio](https://sircryptic.github.io/Basic-Websites-Portfolio) [Repo](https://github.com/SirCryptic/Basic-Websites-Portfolio)   
+<p> ⭐ SirCrypic, cwvs - Version: 0.1 BETA</p>
 
-- bash version soon to come
+- There is also a web based version in my [Basic-Websites-Portfolio](https://sircryptic.github.io/Basic-Websites-Portfolio) [Repo](https://github.com/SirCryptic/Basic-Websites-Portfolio) , This will also probably be likely incorperated into [phisherprice](https://github.com/sircryptic/phisherprice) at some point too.
+
+- Results cannot be 100% Gaurenteed
