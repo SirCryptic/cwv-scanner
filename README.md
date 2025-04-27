@@ -24,57 +24,52 @@ pip install cwv-scanner
 cwv-scanner example.com
 ```
 
-## The scanner checks for the following 36 vulnerabilities:
+## Vulnerabilities Checked by cwv-scanner
 
-| Vulnerability             | Description |
-|---------------------------|-------------|
-| SQL Injection             | This occurs when an attacker inserts malicious SQL code into an application's input which is then executed by the database. |
-| XSS                       | This occurs when an attacker injects malicious scripts into a web page, which are then executed by unsuspecting users. |
-| File Inclusion            | This occurs when unsanitized user input is used to load a file or resource that should not be publicly accessible. |
-| Directory Traversal       | This occurs when user input is used to navigate to directories outside of the intended directory hierarchy. |
-| Remote File Inclusion     | This occurs when malicious code is included from a remote server, allowing an attacker to execute code on the server. |
-| Command Injection         | This occurs when user input is passed directly to the command line, allowing an attacker to execute arbitrary commands. |
-| Cross-Site Request Forgery | This occurs when an attacker submits unauthorized requests on behalf of an authenticated user. |
-| Unrestricted File Upload  | This occurs when malicious files are uploaded to a server and executed, allowing an attacker to execute code on the server. |
-| Password Cracking         | This occurs when weak password policies allow attackers to guess or crack passwords. |
-| Session Hijacking         | This occurs when an attacker gains access to a user's session ID and uses it to impersonate the user. |
-| Broken Authentication and Session Management | This occurs when poorly implemented authentication and session management allow attackers to bypass authentication and hijack sessions. |
-| Remote Code Execution     | This occurs when user input is passed directly to the command line, allowing an attacker to execute arbitrary commands. |
-| Local File Inclusion      | This occurs when unsanitized user input is used to load a file or resource that should not be publicly accessible. |
-| Server Side Request Forgery | This occurs when an attacker sends requests to internal or external servers on behalf of the vulnerable application. |
-| XML External Entity (XXE) Injection | This occurs when external entities are injected into an XML document, leading to the disclosure of sensitive information or execution of remote code. |
-| Cross-Site Script Inclusion (XSSI) | This occurs when an attacker can load a web page's JavaScript data from an external source, allowing them to execute malicious code on the victim's browser. |
-| Server-Side Template Injection (SSTI) | This occurs when an attacker injects malicious code into a template that is parsed and executed on the server-side. |
-| HTML Injection            | This is a vulnerability where an attacker can inject malicious HTML code into a web page. This can allow the attacker to steal sensitive information or execute arbitrary code in the user's browser. |
-| XPath Injection           | This occurs when an attacker injects malicious input into an XPath query, allowing them to access or modify sensitive information. |
-| Code Injection            | This occurs when an attacker can inject malicious code into a web application, allowing them to execute arbitrary code on the server. |
-| Object Injection          | This occurs when an attacker can manipulate serialized objects in a web application to execute arbitrary code. |
-| Cross-Domain Scripting    | This occurs when an attacker can inject a script into a web page from an external domain, allowing them to steal sensitive information from the victim's browser. |
-| HTTP Response Splitting   | This occurs when an attacker can inject newlines into an HTTP response header, allowing them to insert additional HTTP headers and potentially perform other attacks. || Cross-Site Scripting (XSS)         | An attack where an attacker injects malicious code into a web page viewed by other users. This can allow them to steal sensitive information or perform actions on behalf of the user.                                 |
-| SQL Injection                      | An attack where an attacker injects malicious SQL code into a web application to gain access to sensitive information or perform actions on the database.                                                           |
-| Man-in-the-Middle (MitM)           | An attack where an attacker intercepts communication between two parties to steal or manipulate data. This can be done through various techniques, such as ARP poisoning or DNS spoofing.                  |
-| Denial-of-Service (DoS)            | An attack where an attacker overwhelms a server or network with traffic or requests, rendering it unavailable to legitimate users.                                                                                  |
-| Distributed Denial-of-Service (DDoS) | An attack where multiple systems are used to overwhelm a server or network with traffic or requests, rendering it unavailable to legitimate users.                                                           |
-| Buffer Overflow                    | An attack where an attacker can exploit a buffer overflow vulnerability in a web application to execute arbitrary code on the server.                                                                          |
-| Format String Attack               | An attack where an attacker can exploit a format string vulnerability in a web application to execute arbitrary code on the server.                                                                             |
-| Command Injection (Windows)        | An attack where an attacker can inject malicious input into a command executed on a Windows system, allowing them to execute arbitrary code on the server.                                                        |
-| Insecure Cryptographic Storage     | An attack where an attacker can exploit weak cryptographic hashing algorithms to gain access to sensitive information.                                                                                              |
-| Insecure Direct Object References  | Unvalidated or insufficiently validated user input is used to access sensitive information or functionality directly through URL manipulation.                                                                   |
-| Insufficient Logging and Monitoring | Insufficient or nonexistent logging and monitoring capabilities make it difficult to detect and respond to security incidents.                                                                                  |
-| Security Misconfiguration          | Incorrectly configured server settings or application properties can result in vulnerabilities that can be exploited by attackers.                                                                               |
-| Cross-Site Script Inclusion (CSSI) | Unsanitized user input is used to include external resources, such as stylesheets, that could potentially be controlled by an attacker.                                                                          |
-| Click Fraud                        | An attack where an attacker generates fake clicks on online advertisements to increase their revenue or to exhaust a competitor's advertising budget.                                                            |
-| Broken Access Control              | An attack where an attacker is able to gain unauthorized access to resources or actions that should be protected by access controls, allowing them to steal sensitive information or perform malicious actions. |
-| Clickjacking                       | An attack where an attacker tricks a user into clicking on a button or link that is disguised as something else, such as a harmless button, but actually performs a malicious action.                           |
-| Hidden Form Fields                 | This is a type of vulnerability where a form field is hidden from the user, but still included in the form submission. This can allow attackers to submit unexpected data, potentially bypassing form validation or performing other malicious actions. |
-| Object Injection                   | This occurs when an attacker can manipulate serialized objects in a web application to execute arbitrary code.    
-| Shellshock             | Shellshock is a security vulnerability in the Unix Bash shell that was discovered in 2014. It allows an attacker to execute arbitrary code on a target system by exploiting a flaw in how Bash evaluates environment variables. The vulnerability affects many versions of Bash on Unix-based operating systems, including Linux and Mac OS X. It can be used to launch a variety of attacks, including remote code execution, privilege escalation, and data theft. The vulnerability has been patched, but it remains a risk for systems that have not been updated. |
+The scanner checks for the following 36 vulnerabilities:
+
+| Vulnerability                              | Description                                                                 |
+|--------------------------------------------|-----------------------------------------------------------------------------|
+| SQL Injection                              | Injecting malicious SQL code into inputs to manipulate database queries.     |
+| XSS (Cross-Site Scripting)                 | Injecting malicious scripts into web pages viewed by users.                 |
+| File Inclusion                             | Loading unauthorized files due to unsanitized user input.                   |
+| Directory Traversal                        | Accessing restricted directories via manipulated input paths.               |
+| Remote File Inclusion                      | Including malicious code from remote servers via user input.                |
+| Command Injection                          | Executing arbitrary commands by injecting malicious input.                  |
+| Cross-Site Request Forgery (CSRF)          | Tricking users into submitting unauthorized requests.                      |
+| Unrestricted File Upload                   | Uploading malicious files that can be executed on the server.               |
+| Password Cracking                          | Exploiting weak passwords to gain unauthorized access.                     |
+| Session Hijacking                          | Stealing session IDs to impersonate authenticated users.                    |
+| Broken Auth and Session Management         | Bypassing authentication or hijacking sessions due to poor implementation.  |
+| Remote Code Execution                      | Executing arbitrary code on the server via malicious input.                |
+| Local File Inclusion                       | Loading local files that should not be accessible via user input.          |
+| Server Side Request Forgery (SSRF)         | Sending unauthorized requests to internal/external servers.                 |
+| XML External Entity (XXE) Injection        | Exploiting XML parsing to access sensitive data or execute code.            |
+| Cross-Site Script Inclusion (XSSI)         | Loading external JavaScript to execute malicious code in the browser.       |
+| Server-Side Template Injection (SSTI)      | Injecting malicious code into server-side templates for execution.          |
+| HTML Injection                             | Injecting malicious HTML to steal data or manipulate page content.          |
+| XPath Injection                            | Manipulating XPath queries to access unauthorized data.                     |
+| Code Injection                             | Injecting executable code into the application to run on the server.       |
+| Object Injection                           | Manipulating serialized objects to execute arbitrary code.                  |
+| Cross-Domain Scripting                     | Injecting scripts from external domains to steal browser data.              |
+| HTTP Response Splitting                    | Injecting newlines into HTTP headers to manipulate responses.               |
+| Buffer Overflow                            | Exploiting buffer overruns to execute arbitrary code.                      |
+| Format String Attack                       | Exploiting format string vulnerabilities to execute code.                   |
+| Command Injection (Windows)                | Injecting commands into Windows systems via malicious input.                |
+| Insecure Cryptographic Storage             | Exploiting weak encryption to access sensitive data.                       |
+| Insecure Direct Object References          | Accessing unauthorized resources via unvalidated input.                     |
+| Insufficient Logging and Monitoring        | Failing to log or monitor security events, enabling undetected attacks.     |
+| Security Misconfiguration                  | Exploiting misconfigured server or application settings.                   |
+| Cross-Site Script Inclusion (CSSI)         | Including external stylesheets that could be controlled by attackers.       |
+| Click Fraud                                | Generating fake ad clicks to manipulate revenue or budgets.                |
+| Broken Access Control                      | Bypassing access controls to gain unauthorized access to resources.         |
+| Clickjacking                               | Tricking users into clicking disguised malicious elements.                 |
+| Hidden Form Fields                         | Submitting unexpected data via hidden form fields to bypass validation.     |
+| Shellshock                                 | Exploiting Bash vulnerabilities to execute arbitrary code.                  |
 
 <h2> Credits </h2>
 
-- ⭐ [SirCryptic](https://github.com/sircryptic), [cwvs - Version: 0.1 BETA](https://github.com/sircryptic/cwv-scanner)
+- ⭐ [SirCryptic](https://github.com/sircryptic), [cwvs - Version: 1.0.0 Beta](https://github.com/sircryptic/cwv-scanner)
 
 ## FootNote/s
-- There is also a web based version in my [Basic-Websites-Portfolio](https://sircryptic.github.io/Basic-Websites-Portfolio) [Repo](https://github.com/SirCryptic/Basic-Websites-Portfolio) , This will also probably be likely incorperated into [phisherprice](https://github.com/sircryptic/phisherprice) at some point too.
-
 - Results cannot be 100% Gaurenteed
