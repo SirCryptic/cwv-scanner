@@ -47,7 +47,7 @@ jobs:
       name: release
       url: https://pypi.org/p/cwv-scanner
     permissions:
-      id-token: write 
+      id-token: write # Mandatory for trusted publishing
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
