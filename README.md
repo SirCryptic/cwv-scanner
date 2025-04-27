@@ -1,10 +1,6 @@
 <p align="center">
     <img width="300" src="https://user-images.githubusercontent.com/48811414/225269122-4978b2e1-aa8c-4658-8050-bba073d3148d.gif" alt="Null Security Team">
 </p>
-<div align="center">
-  <img src="https://user-images.githubusercontent.com/48811414/86414182-29896d80-bcbb-11ea-9b0b-de6b57eb583d.png">
-  <img src="https://user-images.githubusercontent.com/48811414/86414184-2a220400-bcbb-11ea-89a8-89890f2e3775.png">
-</div>
 
 <div align="center">
     <a href="https://github.com/sircryptic/cwv-scanner/stargazers"><img 
@@ -18,10 +14,17 @@
 
 This is a simple web application vulnerability scanner that checks if a given URL or IP address is vulnerable to common web application security vulnerabilities. The tool is designed to help website owners and security researchers identify vulnerabilities in their web applications that can be exploited by attackers.
 
-<h3 align="center">How it works</h3>
-The scanner uses regular expressions to search for common web application vulnerabilities in the HTML code of the target website. If a vulnerability is found, the tool displays a table of results indicating if it is vulnerable and to which vunlrabilties.
+## Installation
+```bash
+pip install cwv-scanner
+```
 
-## The scanner checks for the following 37 vulnerabilities:
+## Usage
+```bash
+cwv-scanner example.com
+```
+
+## The scanner checks for the following 36 vulnerabilities:
 
 | Vulnerability             | Description |
 |---------------------------|-------------|
@@ -43,7 +46,6 @@ The scanner uses regular expressions to search for common web application vulner
 | Cross-Site Script Inclusion (XSSI) | This occurs when an attacker can load a web page's JavaScript data from an external source, allowing them to execute malicious code on the victim's browser. |
 | Server-Side Template Injection (SSTI) | This occurs when an attacker injects malicious code into a template that is parsed and executed on the server-side. |
 | HTML Injection            | This is a vulnerability where an attacker can inject malicious HTML code into a web page. This can allow the attacker to steal sensitive information or execute arbitrary code in the user's browser. |
-| LDAP Injection            | This occurs when an attacker can inject malicious input into an LDAP search filter or command, allowing them to access or modify sensitive information in the LDAP directory. |
 | XPath Injection           | This occurs when an attacker injects malicious input into an XPath query, allowing them to access or modify sensitive information. |
 | Code Injection            | This occurs when an attacker can inject malicious code into a web application, allowing them to execute arbitrary code on the server. |
 | Object Injection          | This occurs when an attacker can manipulate serialized objects in a web application to execute arbitrary code. |
@@ -67,9 +69,6 @@ The scanner uses regular expressions to search for common web application vulner
 | Hidden Form Fields                 | This is a type of vulnerability where a form field is hidden from the user, but still included in the form submission. This can allow attackers to submit unexpected data, potentially bypassing form validation or performing other malicious actions. |
 | Object Injection                   | This occurs when an attacker can manipulate serialized objects in a web application to execute arbitrary code.    
 | Shellshock             | Shellshock is a security vulnerability in the Unix Bash shell that was discovered in 2014. It allows an attacker to execute arbitrary code on a target system by exploiting a flaw in how Bash evaluates environment variables. The vulnerability affects many versions of Bash on Unix-based operating systems, including Linux and Mac OS X. It can be used to launch a variety of attacks, including remote code execution, privilege escalation, and data theft. The vulnerability has been patched, but it remains a risk for systems that have not been updated. |
-
-## How to use
-To use the tool type `bash scan.sh` , simply enter the URL or IP address of the target webapplication in the input field and press enter. The scanner will then check for vulnerabilities in the target webapplication and display a results table indicating what vulnrabilities are found with `vulnrable` or `not vulnrable` if any are found.
 
 <h2> Credits </h2>
 
