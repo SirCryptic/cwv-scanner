@@ -1,0 +1,6 @@
+include README.md
+include LICENSE
+include cwv_scanner/vulnerabilities.json
+include cwv_scanner/waf_indicators.json
+include cwv_scanner/user_agents.txt
+recursive-include cwv_scanner/banners *.txt
