@@ -38,6 +38,9 @@ jobs:
       - name: Test package import
         run: python -c "from cwv_scanner.cwv_scanner import WebVulnScanner"
 
+      - name: Test CLI command
+        run: cwv-scanner --help
+
   publish:
     name: Publish to PyPI
     runs-on: ubuntu-22.04
@@ -47,7 +50,7 @@ jobs:
       name: release
       url: https://pypi.org/p/cwv-scanner
     permissions:
-      id-token: write # Mandatory for trusted publishing
+      id-token: write
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
