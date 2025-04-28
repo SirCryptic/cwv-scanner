@@ -8,8 +8,8 @@
     <a href="https://github.com/sircryptic/cwv-scanner/network"><img src="https://img.shields.io/github/forks/sircryptic/cwv-scanner.svg" alt="GitHub forks"></a>
     <a href="https://github.com/sircryptic/cwv-scanner/watchers"><img src="https://img.shields.io/github/watchers/sircryptic/cwv-scanner.svg?style=social" alt="GitHub watchers"></a>
     <br>
-        <a href="https://github.com/SirCryptic/cwv-scanner/blob/main/LICENSE"><img src="https://static.pepy.tech/badge/cwv-scanner" alt="PyPI Downloads"></a>
-    <a href="https://pepy.tech/projects/cwv-scanner"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License"></a>
+        <a href="https://pepy.tech/projects/cwv-scanner"><img src="https://static.pepy.tech/badge/cwv-scanner" alt="PyPI Downloads"></a>
+    <a href="https://github.com/SirCryptic/cwv-scanner/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License"></a>
 </div>
 <h3 align="center">Common Web Application Vulnerability Scanner. [python Version]</h3>
 
