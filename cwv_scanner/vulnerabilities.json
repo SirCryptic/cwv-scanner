@@ -1,38 +1,158 @@
 {
-    "SQL Injection": "'\\s*(or|and|union|select|from|where)\\s*['\\\"]?\\s*[0-1]=[0-1]",
-    "XSS": ".*",
-    "File Inclusion": "(include|require)(_once)?[\\s]*(\\(|['\\\"])[\\s]*([A-Za-z0-9_]+)(\\.[A-Za-z]+)?(['\\\"]|\\))",
-    "Directory Traversal": "\\.\\.[/\\\\][A-Za-z0-9_]+(?:\\.[A-Za-z0-9]+)?(?=\\?|\\s|$)",
-    "Remote File Inclusion": "(include|require)(_once)?[\\s]*['\"(]http(s)?:\\/\\/[A-Za-z0-9.-]+.*['\")]",
-    "Command Injection": ";[\\s]*(whoami|ls|dir|cat|echo)[\\s]*[|&;]",
-    "Cross-Site Request Forgery (CSRF)": "<form[^>]*method=[\"']post[\"'][^>]*action=[\"'][^'\"]*[\"']",
-    "Unrestricted File Upload": "\\.(php|asp|aspx|jsp|exe|sh)[\\s]*$",
-    "Password Cracking": "\\b(password|pwd|passcode|pin)=['\\\"][^'\\\"]*['\\\"]",
-    "Session Hijacking": "document\\.cookie\\s*=",
-    "Broken Auth and Session Management": "(PHPSESSID|session_id|JSESSIONID)=[^'\\\"]+",
-    "Remote Code Execution": "\\b(eval|exec|passthru|shell_exec|system|popen|pcntl_exec|proc_open)\\([^<]*>",
-    "Local File Inclusion": "(include|require)(_once)?[\\s]*(\\(|['\\\"])\\.\\.\\/[A-Za-z0-9_]+.*(['\\\"]|\\))",
-    "Server Side Request Forgery (SSRF)": "\\b(curl|file_get_contents|fsockopen|pfsockopen|fopen|readfile)\\(['\\\"]http(s)?:\\/\\/",
-    "XML External Entity (XXE) Injection": "<!ENTITY\\s+[^>]+\\s+SYSTEM\\s+['\\\"][^'\\\"]+['\\\"]",
-    "Cross-Site Script Inclusion (XSSI)": "[a-zA-Z0-9_]+\\s*=\\s*\\[\\s*\\{.*['\\\"]http(s)?:\\/\\/[^'\\\"]*(token|user|session)[^'\\\"]*['\\\"]",
-    "Server-Side Template Injection (SSTI)": "\\{\\{[^\\}]*[0-9][+*\\-][0-9][^\\}]*\\}\\}",
-    "HTML Injection": "<(div|a|span|input|textarea|button)\\s+[^>]*on(click|mouseover|mouseout|keydown)=['\\\"][^'\\\"]*['\\\"]",
-    "XPath Injection": "'\\s*(union|select|from|where)\\s*['\\\"]",
-    "Code Injection": "\\{\\{[^\\}]+\\.(system|passthru|exec)[^\\}]*\\}\\}",
-    "Object Injection": "\\b(unserialize|__wakeup|__destruct)\\(",
-    "Cross-Domain Scripting": "<script\\s+src=['\\\"](?!https?:\\/\\/[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}|/)[^'\\\"]*['\\\"]",
-    "HTTP Response Splitting": "\\r\\n[^\\r\\n]*\\r\\n",
-    "Buffer Overflow": "%[snxhpudiecfgh][0-9]*[snxhpudiecfgh]",
-    "Format String Attack": "%[0-9]*[nspx][^%]*['\\\"]",
-    "Command Injection (Windows)": "\\b(com|exe|bat|cmd)(\\s*\\/c|\\s+-c|\\s+-command|\\s+\\/k|\\s+-k|\\s+-batch|\\s+\\/b)\\b",
-    "Insecure Cryptographic Storage": "\\b(md5|sha1|crypt)\\(",
-    "Insecure Direct Object References": "\\/(users|accounts|orders)\\/\\d+\\b",
-    "Insufficient Logging and Monitoring": "\\b(error_log|trigger_error)\\(",
-    "Security Misconfiguration": "\\b(phpinfo|display_errors|allow_url_include)\\(",
-    "Cross-Site Script Inclusion (CSSI)": "<link\\s+href=['\\\"]http(s)?:\\/\\/(?!siteassets\\.parastorage\\.com|devraw\\.net|github\\.com|fonts\\.googleapis\\.com|cdnjs\\.cloudflare\\.com)[^'\\\"]+['\\\"]",
-    "Click Fraud": "\\b(pay per click fraud|click fraud|ppc fraud|clickbot|click-spam|click spam|ad fraud)\\b",
-    "Broken Access Control": "\\b(path traversal|directory traversal|unauthorized access|access control|forceful browsing|privilege escalation|authorization bypass|insecure direct object reference|IDOR|access control matrix)\\b",
-    "Clickjacking": "\\b(clickjacking|UI redressing|UI redress attack|user interface redressing|user interface redress attack|UI overlay attack|overlay attack)\\b",
-    "Hidden Form Fields": "<input\\s+type=['\\\"]?hidden['\\\"]?\\s+name=['\\\"][^'\\\"]+['\\\"]",
-    "Shellshock": "bash\\s*-c\\s*['\\\"][^'\\\"]*['\\\"]|\\$\\((printf|echo -ne|wget.*\\?cmd=|curl.*\\?data=.*bash)\\)"
+  "SQL Injection": {
+    "pattern": "'\\s*(or|and|union|select|from|where)\\s*['\\\"]?\\s*[0-1]=[0-1]",
+    "severity": "critical"
+  },
+  "XSS": {
+    "pattern": ".*",
+    "severity": "critical"
+  },
+  "File Inclusion": {
+    "pattern": "(include|require)(_once)?[\\s]*(\\(|['\\\"])[\\s]*([A-Za-z0-9_]+)(\\.[A-Za-z]+)?(['\\\"]|\\))",
+    "severity": "high"
+  },
+  "Directory Traversal": {
+    "pattern": "\\.\\.[/\\\\][A-Za-z0-9_]+(?:\\.[A-Za-z0-9]+)?(?=\\?|\\s|$)",
+    "severity": "high"
+  },
+  "Remote File Inclusion": {
+    "pattern": "(include|require)(_once)?[\\s]*['\"(]http(s)?:\\/\\/[A-Za-z0-9.-]+.*['\")]",
+    "severity": "high"
+  },
+  "Command Injection": {
+    "pattern": ";[\\s]*(whoami|ls|dir|cat|echo)[\\s]*[|&;]",
+    "severity": "critical"
+  },
+  "Cross-Site Request Forgery (CSRF)": {
+    "pattern": "<form[^>]*method=[\"']post[\"'][^>]*action=[\"'][^'\"]*[\"']",
+    "severity": "high"
+  },
+  "Unrestricted File Upload": {
+    "pattern": "\\.(php|asp|aspx|jsp|exe|sh)[\\s]*$",
+    "severity": "high"
+  },
+  "Password Cracking": {
+    "pattern": "\\b(password|pwd|passcode|pin)=['\\\"][^'\\\"]*['\\\"]",
+    "severity": "medium"
+  },
+  "Session Hijacking": {
+    "pattern": "document\\.cookie\\s*=",
+    "severity": "high"
+  },
+  "Broken Auth and Session Management": {
+    "pattern": "(PHPSESSID|session_id|JSESSIONID)=[^'\\\"]+",
+    "severity": "high"
+  },
+  "Remote Code Execution": {
+    "pattern": "\\b(eval|exec|passthru|shell_exec|system|popen|pcntl_exec|proc_open)\\([^<]*>",
+    "severity": "critical"
+  },
+  "Local File Inclusion": {
+    "pattern": "(include|require)(_once)?[\\s]*(\\(|['\\\"])\\.\\.\\/[A-Za-z0-9_]+.*(['\\\"]|\\))",
+    "severity": "high"
+  },
+  "Server Side Request Forgery (SSRF)": {
+    "pattern": "\\b(curl|file_get_contents|fsockopen|pfsockopen|fopen|readfile)\\(['\\\"]http(s)?:\\/\\/",
+    "severity": "high"
+  },
+  "XML External Entity (XXE) Injection": {
+    "pattern": "<!ENTITY\\s+[^>]+\\s+SYSTEM\\s+['\\\"][^'\\\"]+['\\\"]",
+    "severity": "critical"
+  },
+  "Cross-Site Script Inclusion (XSSI)": {
+    "pattern": "[a-zA-Z0-9_]+\\s*=\\s*\\[\\s*\\{.*['\\\"]http(s)?:\\/\\/[^'\\\"]*(token|user|session)[^'\\\"]*['\\\"]",
+    "severity": "medium"
+  },
+  "Server-Side Template Injection (SSTI)": {
+    "pattern": "\\{\\{[^\\}]*[0-9][+*\\-][0-9][^\\}]*\\}\\}",
+    "severity": "critical"
+  },
+  "HTML Injection": {
+    "pattern": "<(div|a|span|input|textarea|button)\\s+[^>]*on(click|mouseover|mouseout|keydown)=['\\\"][^'\\\"]*['\\\"]",
+    "severity": "medium"
+  },
+  "XPath Injection": {
+    "pattern": "'\\s*(union|select|from|where)\\s*['\\\"]",
+    "severity": "high"
+  },
+  "Code Injection": {
+    "pattern": "\\{\\{[^\\}]+\\.(system|passthru|exec)[^\\}]*\\}\\}",
+    "severity": "critical"
+  },
+  "Object Injection": {
+    "pattern": "\\b(unserialize|__wakeup|__destruct)\\(",
+    "severity": "high"
+  },
+  "Cross-Domain Scripting": {
+    "pattern": "<script\\s+src=['\\\"](?!https?:\\/\\/[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}|/)[^'\\\"]*['\\\"]",
+    "severity": "medium"
+  },
+  "HTTP Response Splitting": {
+    "pattern": "\\r\\n[^\\r\\n]*\\r\\n",
+    "severity": "high"
+  },
+  "Buffer Overflow": {
+    "pattern": "%[snxhpudiecfgh][0-9]*[snxhpudiecfgh]",
+    "severity": "medium"
+  },
+  "Format String Attack": {
+    "pattern": "%[0-9]*[nspx][^%]*['\\\"]",
+    "severity": "high"
+  },
+  "Command Injection (Windows)": {
+    "pattern": "\\b(com|exe|bat|cmd)(\\s*\\/c|\\s+-c|\\s+-command|\\s+\\/k|\\s+-k|\\s+-batch|\\s+\\/b)\\b",
+    "severity": "critical"
+  },
+  "Insecure Cryptographic Storage": {
+    "pattern": "\\b(md5|sha1|crypt)\\(",
+    "severity": "medium"
+  },
+  "Insecure Direct Object References": {
+    "pattern": "\\/(users|accounts|orders)\\/\\d+\\b",
+    "severity": "high"
+  },
+  "Insufficient Logging and Monitoring": {
+    "pattern": "\\b(error_log|trigger_error)\\(",
+    "severity": "low"
+  },
+  "Security Misconfiguration": {
+    "pattern": "\\b(phpinfo|display_errors|allow_url_include)\\(",
+    "severity": "medium"
+  },
+  "Cross-Site Script Inclusion (CSSI)": {
+    "pattern": "<link\\s+href=['\\\"]http(s)?:\\/\\/(?!siteassets\\.parastorage\\.com|devraw\\.net|github\\.com|fonts\\.googleapis\\.com|cdnjs\\.cloudflare\\.com)[^'\\\"]+['\\\"]",
+    "severity": "medium"
+  },
+  "Click Fraud": {
+    "pattern": "\\b(pay per click fraud|click fraud|ppc fraud|clickbot|click-spam|click spam|ad fraud)\\b",
+    "severity": "low"
+  },
+  "Broken Access Control": {
+    "pattern": "\\b(path traversal|directory traversal|unauthorized access|access control|forceful browsing|privilege escalation|authorization bypass|insecure direct object reference|IDOR|access control matrix)\\b",
+    "severity": "high"
+  },
+  "Clickjacking": {
+    "pattern": "\\b(clickjacking|UI redressing|UI redress attack|user interface redressing|user interface redress attack|UI overlay attack|overlay attack)\\b",
+    "severity": "medium"
+  },
+  "Hidden Form Fields": {
+    "pattern": "<input\\s+type=['\\\"]?hidden['\\\"]?\\s+name=['\\\"][^'\\\"]+['\\\"]",
+    "severity": "low"
+  },
+  "Shellshock": {
+    "pattern": "bash\\s*-c\\s*['\\\"][^'\\\"]*['\\\"]|\\$\\((printf|echo -ne|wget.*\\?cmd=|curl.*\\?data=.*bash)\\)",
+    "severity": "critical"
+  },
+  "JWT Vulnerabilities": {
+    "pattern": "eyJ[A-Za-z0-9-_]+\\.[A-Za-z0-9-_]+\\.[A-Za-z0-9-_]*",
+    "severity": "high"
+  },
+  "Deserialization": {
+    "pattern": "\\b(unserialize|pickle\\.loads|yaml\\.load|json\\.loads)\\(",
+    "severity": "high"
+  },
+  "Open Redirect": {
+    "pattern": "location\\.(href|replace|assign)\\s*=\\s*[^;]*\\?",
+    "severity": "high"
+  }
 }
