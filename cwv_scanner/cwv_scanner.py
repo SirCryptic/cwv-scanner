@@ -843,7 +843,7 @@ class WebVulnScanner:
             fingerprint['cms_guess'] = 'WordPress'
             # WordPress version detection
             wp_version_match = re.search(r'wp-embed\.min\.js\?ver=(\d+\.\d+\.\d+)', content_lower) or \
-                              re.search(r'version (\d+\.\d+\.\d+)', fingerprint.get('generator', '').lower()) or \
+                              re.search(r'version (\d+\.\d+\.\d+)', (fingerprint.get('generator') or '').lower()) or \
                               re.search(r'WordPress (\d+\.\d+\.\d+)', content_lower) or \
                               re.search(r'wp-includes/js/wp-embed\.min\.js\?ver=(\d+\.\d+\.\d+)', content_lower)
             if wp_version_match:
@@ -857,14 +857,14 @@ class WebVulnScanner:
             fingerprint['cms_guess'] = 'Joomla'
             # Joomla version detection
             joomla_version_match = re.search(r'Joomla! (\d+\.\d+)', content_lower) or \
-                                  re.search(r'joomla (\d+\.\d+)', fingerprint.get('generator', '').lower())
+                                  re.search(r'joomla (\d+\.\d+)', (fingerprint.get('generator') or '').lower())
             if joomla_version_match:
                 fingerprint['joomla_version'] = joomla_version_match.group(1)
         elif 'drupal' in content_lower:
             fingerprint['cms_guess'] = 'Drupal'
             # Drupal version detection
             drupal_version_match = re.search(r'Drupal (\d+)', content_lower) or \
-                                  re.search(r'drupal (\d+)', fingerprint.get('generator', '').lower())
+                                  re.search(r'drupal (\d+)', (fingerprint.get('generator') or '').lower())
             if drupal_version_match:
                 fingerprint['drupal_version'] = drupal_version_match.group(1)
         elif 'magento' in content_lower:
