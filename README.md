@@ -70,7 +70,7 @@ The scanner checks for the following 36 vulnerabilities:
 
 <h2> Credits </h2>
 
-- ⭐ [SirCryptic](https://github.com/sircryptic), [cwvs - Version: 1.0.0 Beta](https://github.com/sircryptic/cwv-scanner)
+- ⭐ [SirCryptic](https://github.com/sircryptic), [cwvs - Version: 1.0.1](https://github.com/sircryptic/cwv-scanner)
 
 ## FootNote/s
 - Results cannot be 100% Gaurenteed
