@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="cwv-scanner",
-    version="1.0.1",
+    version="1.0.2",
     author="SirCryptic",
     description="Common Web Application Vulnerability Scanner",
     long_description=long_description,
@@ -31,3 +31,4 @@ setup(
         ],
     },
 )
+
