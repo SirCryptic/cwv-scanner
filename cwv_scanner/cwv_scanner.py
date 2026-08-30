@@ -89,7 +89,7 @@ class WebVulnScanner:
             "XSS": ["<script>alert(1)</script>", "<img src=x onerror=alert(1)>", "<svg onload=alert(1)>"],
             "Cross-Site Request Forgery (CSRF)": [],
             "Directory Traversal": ["../../etc/passwd", "../../../../etc/shadow", "../config.php", "..\\..\\..\\windows\\system32\\drivers\\etc\\hosts"],
-            "SQL Injection": ["' OR '1'='1 -- ", "'; DROP TABLE users -- "],
+            "SQL Injection": ["' OR '1'='1 -- ", "'; DROP TABLE users -- ", "' AND SLEEP(5) -- ", "' OR 1=1 -- ", "1' AND '1'='1", "1' AND '1'='2"],
             "Command Injection": ["; whoami", "| whoami"],
             "Remote Code Execution": ["; id", "| uname -a"],
             "Local File Inclusion": ["../../../etc/passwd", "../../../../etc/passwd"],
@@ -179,6 +179,9 @@ class WebVulnScanner:
         self.waf_block_counts = {}
         self.waf_lock = threading.Lock()
         self.waf_detected = False
+        self._baseline_cache = {}
+        self._baseline_lock = threading.Lock()
+        self._detected_cms = None
         if self.proxy:
             self.session.proxies = {"http": self.proxy, "https": self.proxy}
         logger.info("Initialized with user agent: %s", self.current_user_agent)
@@ -198,6 +201,51 @@ class WebVulnScanner:
             "ora-", "oracle error"
         ]
         return any(p in t for p in patterns)
+
+    def _get_baseline(self, url: str, param: str, method: str = "GET") -> str:
+        """Fetch a baseline response for comparison with payload responses."""
+        cache_key = (url, param, method)
+        with self._baseline_lock:
+            if cache_key in self._baseline_cache:
+                return self._baseline_cache[cache_key]
+        benign_value = "testvalue123"
+        try:
+            time.sleep(self.request_delay)
+            proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
+            if method == "GET":
+                resp = self.session.get(
+                    f"{url}?{param}={benign_value}", timeout=5,
+                    proxies=proxies, verify=self.verify_ssl
+                )
+            else:
+                resp = self.session.post(
+                    url, data={param: benign_value}, timeout=5,
+                    proxies=proxies, verify=self.verify_ssl
+                )
+            self._inc_requests()
+            text = resp.text
+        except Exception:
+            text = ""
+        with self._baseline_lock:
+            self._baseline_cache[cache_key] = text
+        return text
+
+    def _is_waf_challenge(self, response) -> bool:
+        """Detect WAF challenge/block pages including JS challenges."""
+        text = response.text.lower()
+        status = response.status_code
+        headers_lower = {k.lower(): v.lower() for k, v in response.headers.items()}
+
+        if status == 403 and any(ind in text for ind in self.waf_indicators):
+            return True
+        if 'cf-ray' in headers_lower and status in (403, 503) and ('challenge-platform' in text or 'turnstile' in text or 'ray id' in text):
+            return True
+        if status == 403 and 'server' in headers_lower and any(waf in headers_lower['server'] for waf in ['cloudflare', 'sucuri', 'imperva', 'akamai']):
+            return True
+        challenge_signals = ['jschl-answer', 'challenge-form', '_cf_chl_opt', 'managed_checking']
+        if status == 503 and any(sig in text for sig in challenge_signals):
+            return True
+        return False
 
     def load_vulnerabilities(self) -> Dict[str, Dict[str, Any]]:
         """Load vulnerability patterns from a JSON file."""
@@ -296,33 +344,142 @@ class WebVulnScanner:
             return 0, "", normalized_target, {}
 
     def is_waf_response(self, text: str) -> bool:
-        """Check if the response is from a WAF block page."""
-        text_lower = text.lower()
-        return any(indicator in text_lower for indicator in self.waf_indicators)
+        """Check if the response is from a WAF block page (requires multiple signals)."""
+        text_lower = text.lower() if not text.islower() else text
+        indicator_count = sum(1 for ind in self.waf_indicators if ind in text_lower)
+        if indicator_count >= 3:
+            return True
+        if indicator_count >= 1 and len(text) < 5000:
+            return True
+        return False
 
-    def _handle_response(self, name: str, response, payload: str, method: str, target: str) -> List[Tuple[str, str, float, str]]:
-        """Handle response for a specific vulnerability."""
+    @staticmethod
+    def _build_poc(method: str, url: str, payload: str, param: str = None, evidence: str = "") -> Dict[str, str]:
+        """Build a PoC reproduction dict for a finding."""
+        from urllib.parse import quote
+        poc = {'method': method, 'url': url, 'payload': payload, 'evidence': evidence}
+        if method == "GET":
+            poc['curl'] = f'curl -s -o /dev/null -w "%{{http_code}}" "{url}"'
+            poc['browser'] = url
+            poc['reproduce'] = f'Visit {url} in a browser and look for: {evidence}'
+        else:
+            poc['curl'] = f'curl -s -X POST -d "{param}={quote(payload)}" "{url}"'
+            poc['reproduce'] = f'POST to {url} with {param}={payload} and look for: {evidence}'
+        return poc
+
+    def _handle_response(self, name: str, response, payload: str, method: str, target: str, baseline_text: str = "", param: str = "") -> List[Tuple]:
+        """Handle response for a specific vulnerability with baseline comparison."""
         matches = []
-        text_lower = response.text.lower()
-        if self.is_waf_response(text_lower):
+        text = response.text
+        text_lower = text.lower()
+        req_url = response.url
+
+        if self._is_waf_challenge(response) or self.is_waf_response(text_lower):
             with self.waf_lock:
                 self.waf_block_counts[name] = self.waf_block_counts.get(name, 0) + 1
             logger.debug("WAF blocked %s test: %s %s", name, method, response.url)
-            return matches  # Skip
+            return matches
 
-        if name == "Server-Side Template Injection (SSTI)" and "49" in response.text:
-            matches.append((response.text[:120], f"Active SSTI test: {payload} -> 49", 0.9, "Active"))
-        elif name == "XSS" and payload in response.text:
-            matches.append((response.text[:120], f"Active XSS test: {payload} reflected", 0.9, "Active"))
+        def _add(desc, conf, evidence=""):
+            poc = self._build_poc(method, req_url, payload, param, evidence or desc)
+            matches.append((text[:120], desc, conf, "Active", poc))
+
+        if name == "Server-Side Template Injection (SSTI)":
+            # CMS platforms that do NOT evaluate arbitrary template expressions from user input.
+            # SSTI requires a raw template engine (Jinja2, Twig, Mako, etc.) exposed to user input.
+            # Standard CMS platforms sanitize or ignore template-like syntax in user queries.
+            cms_not_ssti_vulnerable = {
+                'MediaWiki', 'WordPress', 'Joomla', 'Drupal', 'Shopify', 'Wix',
+                'Squarespace', 'Ghost', 'Blogger', 'Moodle', 'OpenCart', 'PrestaShop',
+            }
+            ssti_markers = {"{{7*7}}": "49", "${7*7}": "49", "<%=7*7%>": "49"}
+            expected = ssti_markers.get(payload)
+            if expected and expected in text:
+                if self._detected_cms in cms_not_ssti_vulnerable:
+                    logger.debug("SSTI suppressed: %s does not evaluate user-controlled template expressions", self._detected_cms)
+                else:
+                    is_search_page = any(s in text_lower for s in ['search results', 'searchresults', 'no results', 'did you mean'])
+                    if is_search_page:
+                        logger.debug("SSTI suppressed: search page naturally contains short numeric strings")
+                    else:
+                        in_baseline = expected in baseline_text if baseline_text else False
+                        if not in_baseline:
+                            idx = text.find(expected)
+                            context_window = text[max(0, idx - 30):idx + len(expected) + 30]
+                            if payload not in context_window:
+                                _add(f"Active SSTI test: {payload} evaluated to {expected} (not in baseline)", 0.9, f'"{expected}" appears without raw payload nearby')
+                            else:
+                                _add(f"Active SSTI test: {payload} -> {expected} (reflected near payload, suspected)", 0.5, f'"{expected}" near raw payload')
+
+        elif name == "XSS":
+            if payload in text:
+                in_baseline = payload in baseline_text if baseline_text else False
+                if not in_baseline:
+                    from html import escape as html_escape
+                    escaped_payload = html_escape(payload)
+                    if escaped_payload in text and payload not in text.replace(escaped_payload, ''):
+                        _add(f"Active XSS test: {payload} reflected but HTML-escaped", 0.2, f'escaped payload in response')
+                    else:
+                        idx = text.find(payload)
+                        surrounding = text[max(0, idx - 50):idx + len(payload) + 50].lower()
+                        in_attr = any(ctx in surrounding for ctx in ['value="', "value='", 'placeholder="', 'title="'])
+                        in_tag_context = '<' in text[max(0, idx - 5):idx]
+                        if in_tag_context or not in_attr:
+                            _add(f"Active XSS test: {payload} reflected unescaped in HTML context", 0.8, f'raw payload in HTML body')
+                        else:
+                            _add(f"Active XSS test: {payload} reflected in attribute (suspected)", 0.5, f'payload in attribute value')
+
         elif name == "SQL Injection":
-            if self._has_db_error(response.text) and 500 <= response.status_code < 600:
-                matches.append((response.text[:120], f"Active SQLi test: {payload} caused database error", 0.8, "Active"))
-        elif name in ["Command Injection", "Remote Code Execution"] and any(cmd_out in response.text.lower() for cmd_out in ['uid=', 'root', 'bin/bash', 'whoami']):
-            matches.append((response.text[:120], f"Active {name} test: {payload} executed", 0.8, "Active"))
-        elif name in ["Local File Inclusion", "Remote File Inclusion"] and any(sensitive in response.text.lower() for sensitive in ['root:', '/etc/passwd', '/etc/shadow']):
-            matches.append((response.text[:120], f"Active {name} test: {payload} included file", 0.8, "Active"))
-        elif name == "JWT Vulnerabilities" and 'eyJ' in response.text:
-            matches.append((response.text[:120], f"Active JWT test: Potential weak token with {payload}", 0.7, "Active"))
+            has_error = self._has_db_error(text)
+            baseline_has_error = self._has_db_error(baseline_text) if baseline_text else False
+            is_search = any(s in text_lower for s in ['search results', 'searchresults', 'no results', 'did you mean', 'showing results'])
+            if has_error and not baseline_has_error:
+                _add(f"Active SQLi test: {payload} caused database error (HTTP {response.status_code})", 0.85, f'DB error string in response (absent from baseline)')
+            elif response.status_code >= 500 and baseline_text:
+                _add(f"Active SQLi test: {payload} caused server error (HTTP {response.status_code})", 0.6, f'HTTP {response.status_code} vs baseline 200')
+            if baseline_text and not has_error and not is_search:
+                baseline_len = len(baseline_text)
+                response_len = len(text)
+                if baseline_len > 0:
+                    diff_ratio = abs(response_len - baseline_len) / baseline_len
+                    if diff_ratio > 0.5 and response.status_code == 200:
+                        _add(f"Active SQLi test: {payload} caused significant response size change ({diff_ratio:.0%})", 0.35, f'response {response_len} bytes vs baseline {baseline_len} bytes')
+
+        elif name in ["Command Injection", "Remote Code Execution"]:
+            cmd_patterns = [
+                (r'uid=\d+\(\w+\)\s+gid=\d+', 'uid= output detected'),
+                (r'root:x:0:0:', '/etc/passwd content leaked'),
+                (r'(?:Linux|Darwin|SunOS)\s+\S+\s+\d+\.\d+', 'uname output detected'),
+            ]
+            for pattern, description in cmd_patterns:
+                if re.search(pattern, text):
+                    in_baseline = bool(re.search(pattern, baseline_text)) if baseline_text else False
+                    if not in_baseline:
+                        _add(f"Active {name} test: {payload} - {description}", 0.9, f'regex /{pattern}/ matched in response')
+
+        elif name in ["Local File Inclusion", "Remote File Inclusion"]:
+            passwd_pattern = r'^[a-z_][a-z0-9_-]*:x:\d+:\d+:'
+            has_passwd_struct = bool(re.search(passwd_pattern, text, re.MULTILINE))
+            in_baseline = bool(re.search(passwd_pattern, baseline_text, re.MULTILINE)) if baseline_text else False
+            if has_passwd_struct and not in_baseline:
+                _add(f"Active {name} test: {payload} exposed /etc/passwd structure", 0.9, f'/etc/passwd format lines in response')
+            win_patterns = [
+                r'\[boot loader\]',
+                r'\[operating systems\]',
+                r'\[extensions\]',
+            ]
+            for wp in win_patterns:
+                if re.search(wp, text, re.IGNORECASE):
+                    in_base = bool(re.search(wp, baseline_text, re.IGNORECASE)) if baseline_text else False
+                    if not in_base:
+                        _add(f"Active {name} test: {payload} exposed Windows system file", 0.85, f'Windows INI structure in response')
+                        break
+
+        elif name == "JWT Vulnerabilities" and 'eyJ' in text:
+            in_baseline = 'eyJ' in baseline_text if baseline_text else False
+            if not in_baseline:
+                _add(f"Active JWT test: Potential weak token with {payload}", 0.7, f'"eyJ" (base64 JWT header) in response')
+
         elif name == "Deserialization":
             deser_patterns = [
                 r'warning: unserialize\(',
@@ -330,9 +487,10 @@ class WebVulnScanner:
                 r'call stack.*unserialize'
             ]
             has_error = any(re.search(p, text_lower) for p in deser_patterns)
-            payload_reflected = payload[:10] in response.text if len(payload) > 10 else payload in response.text
-            if (has_error or payload_reflected) and response.status_code >= 400:
-                matches.append((response.text[:120], f"Active Deserialization test: {payload} triggered", 0.7, "Active"))
+            baseline_has_error = any(re.search(p, baseline_text.lower()) for p in deser_patterns) if baseline_text else False
+            if has_error and not baseline_has_error and response.status_code >= 400:
+                _add(f"Active Deserialization test: {payload} triggered unserialize error", 0.75, f'PHP unserialize error in response')
+
         elif name == "Open Redirect":
             original_host = urlparse(target).netloc
             final_host = urlparse(response.url).netloc
@@ -341,11 +499,12 @@ class WebVulnScanner:
             evil_in_target = 'evil.com' in final_host.lower()
             if was_redirect and host_changed and evil_in_target:
                 location = response.history[-1].headers.get('Location', '') if response.history else ''
-                matches.append((response.text[:120], f"Active Open Redirect test: {payload} redirected via {location}", 0.8, "Active"))
+                _add(f"Active Open Redirect test: {payload} redirected via {location}", 0.85, f'redirected to {final_host}')
+
         return matches
 
     def _test_post_forms(self, target: str, soup: BeautifulSoup, payloads: List[str], name: str) -> List[Tuple[str, str, float, str]]:
-        """Test payloads via POST to forms."""
+        """Test payloads via POST to forms with baseline comparison."""
         matches = []
         for form in soup.find_all('form')[:2]:
             action = form.get('action') or ''
@@ -359,7 +518,8 @@ class WebVulnScanner:
                 continue
             target_param = params[0]
             base_inputs = {p: "test" for p in params}
-            for payload in payloads[:3]:  # Limit payloads
+            baseline_text = self._get_baseline(action, target_param, "POST")
+            for payload in payloads[:3]:
                 inputs = base_inputs.copy()
                 inputs[target_param] = payload
                 try:
@@ -367,24 +527,124 @@ class WebVulnScanner:
                     response = requests.post(action, data=inputs, timeout=5, proxies={"http": self.proxy, "https": self.proxy} if self.proxy else None, verify=self.verify_ssl)
                     self._inc_requests()
                     logger.debug("Active %s test: POST %s with %s, Response: %s", name, action, inputs, response.text[:200])
-                    matches.extend(self._handle_response(name, response, payload, "POST", target))
+                    matches.extend(self._handle_response(name, response, payload, "POST", target, baseline_text, target_param))
                 except requests.RequestException as e:
                     logger.debug("Active %s test failed: %s", name, e)
         return matches
 
-    def _test_get_params(self, target: str, payloads: List[str], name: str) -> List[Tuple[str, str, float, str]]:
-        """Test payloads via GET parameters."""
+    def _extract_params_from_pages(self, pages: List[Tuple[str, int, str, Dict]]) -> Set[str]:
+        """Extract real parameter names from crawled URLs and forms."""
+        params = set()
+        for url, _, content, _ in pages:
+            parsed = urlparse(url)
+            if parsed.query:
+                for part in parsed.query.split('&'):
+                    if '=' in part:
+                        params.add(part.split('=', 1)[0])
+            soup = BeautifulSoup(content, 'html.parser', parse_only=SoupStrainer(['form', 'a']))
+            for a in soup.find_all('a', href=True):
+                href = a['href']
+                if '?' in href:
+                    query = href.split('?', 1)[1]
+                    for part in query.split('&'):
+                        if '=' in part:
+                            params.add(part.split('=', 1)[0])
+            for form in soup.find_all('form'):
+                for inp in form.find_all(['input', 'select', 'textarea']):
+                    n = inp.get('name')
+                    if n and inp.get('type') not in ['hidden', 'submit', 'button']:
+                        params.add(n)
+        return params
+
+    def _test_get_params(self, target: str, payloads: List[str], name: str, extra_params: Set[str] = None) -> List[Tuple[str, str, float, str]]:
+        """Test payloads via GET parameters with baseline comparison."""
         matches = []
+        search_params = {'q', 'query', 'search', 's', 'keyword', 'term'}
+        # CMS framework params that are not user-injectable — they control routing/rendering, not DB queries
+        framework_params = {
+            'redlink', 'action', 'title', 'oldid', 'diff', 'curid', 'returnto',
+            'type', 'limit', 'offset', 'sort', 'order', 'from', 'token',
+            'wpEditToken', 'wpSave', 'wpPreview',
+        }
         common_params = ['q', 'id']
+        if extra_params:
+            common_params = list(dict.fromkeys(common_params + sorted(extra_params)))[:8]
+        proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
         for param in common_params:
-            for payload in payloads[:3]:  # Limit
+            if param.lower() in framework_params:
+                logger.debug("Skipping framework param '%s' — not user-injectable", param)
+                continue
+            baseline_text = self._get_baseline(target, param, "GET")
+            for payload in payloads[:5]:
                 test_url = f"{target}?{param}={payload}"
                 try:
                     time.sleep(self.request_delay)
-                    response = requests.get(test_url, timeout=5, proxies={"http": self.proxy, "https": self.proxy} if self.proxy else None, verify=self.verify_ssl)
+                    is_time_based = 'SLEEP(' in payload.upper() or 'WAITFOR' in payload.upper() or 'PG_SLEEP' in payload.upper()
+                    timeout = 15 if is_time_based else 5
+                    start_t = time.time()
+                    response = requests.get(test_url, timeout=timeout, proxies=proxies, verify=self.verify_ssl)
+                    elapsed = time.time() - start_t
                     self._inc_requests()
-                    logger.debug("Active %s test: GET %s, Response: %s", name, test_url, response.text[:200])
-                    matches.extend(self._handle_response(name, response, payload, "GET", target))
+                    logger.debug("Active %s test: GET %s, Response: %s (%.2fs)", name, test_url, response.text[:200], elapsed)
+                    matches.extend(self._handle_response(name, response, payload, "GET", target, baseline_text, param))
+                    if name == "SQL Injection" and is_time_based and elapsed >= 4.5:
+                        # Confirmation: measure a control request (no SLEEP) to establish baseline latency
+                        control_payload = payload.upper().replace('SLEEP(5)', 'SLEEP(0)').replace('WAITFOR DELAY', 'WAITFOR DELAY \'00:00:00\' --NOOP')
+                        control_url = f"{target}?{param}={control_payload}"
+                        try:
+                            time.sleep(self.request_delay)
+                            ctrl_start = time.time()
+                            requests.get(control_url, timeout=10, proxies=proxies, verify=self.verify_ssl)
+                            ctrl_elapsed = time.time() - ctrl_start
+                            self._inc_requests()
+                        except Exception:
+                            ctrl_elapsed = elapsed
+                        # Also repeat the original payload to confirm consistency
+                        try:
+                            time.sleep(self.request_delay)
+                            confirm_start = time.time()
+                            requests.get(test_url, timeout=15, proxies=proxies, verify=self.verify_ssl)
+                            confirm_elapsed = time.time() - confirm_start
+                            self._inc_requests()
+                        except Exception:
+                            confirm_elapsed = 0
+                        delay_above_control = elapsed - ctrl_elapsed
+                        confirm_above_control = confirm_elapsed - ctrl_elapsed
+                        logger.debug("Time-based SQLi check: initial=%.1fs, control=%.1fs, confirm=%.1fs, delta=%.1fs", elapsed, ctrl_elapsed, confirm_elapsed, delay_above_control)
+                        if delay_above_control >= 3.5 and confirm_above_control >= 3.5:
+                            poc = self._build_poc("GET", test_url, payload, param, f"delay {elapsed:.1f}s vs control {ctrl_elapsed:.1f}s, confirmed {confirm_elapsed:.1f}s")
+                            matches.append((response.text[:120], f"Active SQLi test: {payload} caused consistent {delay_above_control:.1f}s delay above control (confirmed)", 0.85, "Active", poc))
+                        elif delay_above_control >= 3.5:
+                            logger.debug("Time-based SQLi: initial delay but confirmation failed (control=%.1fs, confirm=%.1fs)", ctrl_elapsed, confirm_elapsed)
+                    if name == "SQL Injection" and baseline_text and not is_time_based:
+                        resp_lower = response.text.lower()
+                        is_search_param = param.lower() in search_params
+                        is_search = is_search_param or any(s in resp_lower for s in ['search results', 'searchresults', 'no results', 'did you mean', 'showing results'])
+                        if not is_search:
+                            true_cond = "1'='1" in payload or "1=1" in payload
+                            false_cond = "1'='2" in payload or "1=2" in payload
+                            if true_cond and len(response.text) != len(baseline_text):
+                                logger.debug("Boolean SQLi candidate (true): response differs from baseline by %d chars", abs(len(response.text) - len(baseline_text)))
+                            if false_cond and abs(len(response.text) - len(baseline_text)) > len(baseline_text) * 0.15:
+                                poc = self._build_poc("GET", test_url, payload, param, f"response size {len(response.text)} vs baseline {len(baseline_text)}")
+                                matches.append((response.text[:120], f"Active SQLi test: {payload} boolean-based response differs from baseline", 0.4, "Active", poc))
+                except requests.exceptions.Timeout:
+                    if name == "SQL Injection" and ('SLEEP(' in payload.upper() or 'WAITFOR' in payload.upper()):
+                        # Timeout alone is not proof — could be WAF/network. Send a control to check.
+                        try:
+                            time.sleep(self.request_delay)
+                            ctrl_url = f"{target}?{param}=testvalue123"
+                            ctrl_start = time.time()
+                            requests.get(ctrl_url, timeout=10, proxies=proxies, verify=self.verify_ssl)
+                            ctrl_elapsed = time.time() - ctrl_start
+                            self._inc_requests()
+                            if ctrl_elapsed < 5:
+                                poc = self._build_poc("GET", test_url, payload, param, f"payload timed out but control responded in {ctrl_elapsed:.1f}s")
+                                matches.append(("", f"Active SQLi test: {payload} caused timeout, control responded in {ctrl_elapsed:.1f}s (suspected time-based blind)", 0.6, "Active", poc))
+                            else:
+                                logger.debug("Time-based SQLi timeout: control also slow (%.1fs), likely network/WAF", ctrl_elapsed)
+                        except Exception:
+                            logger.debug("Time-based SQLi timeout: control request also failed, likely network issue")
                 except requests.RequestException as e:
                     logger.debug("Active %s test failed: %s", name, e)
         return matches
@@ -495,7 +755,7 @@ class WebVulnScanner:
             logger.warning("Skipped %d invalid URLs: %s", len(invalid_urls), ", ".join(sorted(invalid_urls)[:5]) + ("..." if len(invalid_urls) > 5 else ""))
         return results
 
-    def active_scan(self, target: str, soup: BeautifulSoup, name: str, headers: Dict[str, str]) -> List[Tuple[str, str, float, str]]:
+    def active_scan(self, target: str, soup: BeautifulSoup, name: str, headers: Dict[str, str], discovered_params: Set[str] = None) -> List[Tuple[str, str, float, str]]:
         """Perform active scanning by injecting payloads and analyzing responses."""
         matches = []
         proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
@@ -530,7 +790,7 @@ class WebVulnScanner:
 
         if name in ["Server-Side Template Injection (SSTI)", "XSS", "SQL Injection", "Command Injection", "Remote Code Execution", "Local File Inclusion", "Remote File Inclusion", "JWT Vulnerabilities", "Deserialization", "Open Redirect"]:
             matches.extend(self._test_post_forms(normalized_target, soup, payloads, name))
-            matches.extend(self._test_get_params(normalized_target, payloads, name))
+            matches.extend(self._test_get_params(normalized_target, payloads, name, discovered_params))
 
         elif name == "Cross-Site Request Forgery (CSRF)":
             forms = soup.find_all('form')
@@ -550,7 +810,8 @@ class WebVulnScanner:
                         self._inc_requests()
                         logger.debug("Active CSRF test: POST %s with %s, Response: %s", action, inputs, response.text[:200])
                         if response.status_code in [200, 201, 302] and "error" not in response.text.lower():
-                            matches.append((response.text[:120], f"Active CSRF test: Form submission succeeded without token", 0.9, "Active"))
+                            poc = self._build_poc("POST", action, "test", list(inputs.keys())[0] if inputs else "", f"HTTP {response.status_code} success without CSRF token")
+                            matches.append((response.text[:120], f"Active CSRF test: Form submission succeeded without token", 0.9, "Active", poc))
                     except requests.RequestException as e:
                         logger.debug("Active CSRF test failed: %s", e)
                         pass
@@ -579,11 +840,13 @@ class WebVulnScanner:
                         ) or (
                             "hosts" in response_text and "127.0.0.1" in response_text
                         ):
+                            poc = self._build_poc("GET", test_url, payload, param, "passwd/hosts file content in response")
                             matches.append((
                                 response.text[:120],
                                 f"Active Directory Traversal test: {param}={payload} exposed sensitive file",
                                 0.9,
-                                "Active"
+                                "Active",
+                                poc
                             ))
                     except requests.RequestException as e:
                         logger.debug("Active Directory Traversal test failed for %s: %s", name, e)
@@ -595,9 +858,13 @@ class WebVulnScanner:
 
         return matches
 
-    def check_vulnerability(self, args: Tuple[str, Dict[str, Any], str, BeautifulSoup, str, Dict]) -> Tuple[str, str, List[Tuple[str, str, float, str]], str, str]:
+    def check_vulnerability(self, args) -> Tuple[str, str, List[Tuple[str, str, float, str]], str, str]:
         """Check a single vulnerability with passive and active scanning."""
-        name, vuln_data, content, soup, target, headers = args
+        if len(args) == 7:
+            name, vuln_data, content, soup, target, headers, discovered_params = args
+        else:
+            name, vuln_data, content, soup, target, headers = args
+            discovered_params = None
         if not headers:
             headers = {}
         conf = self.confidence_scores.get(name, 0.5)
@@ -691,7 +958,7 @@ class WebVulnScanner:
 
             if name in self.active_payloads:
                 if not self.passive:
-                    active_matches = self.active_scan(target, soup, name, headers)
+                    active_matches = self.active_scan(target, soup, name, headers, discovered_params)
                 else:
                     active_matches = []
             else:
@@ -713,13 +980,34 @@ class WebVulnScanner:
         """Check vulnerabilities across multiple pages."""
         self.waf_block_counts.clear()
         agg = OrderedDict()
+        discovered_params = self._extract_params_from_pages(pages)
+        if discovered_params:
+            logger.info("Discovered %d parameters from crawled pages: %s", len(discovered_params), ", ".join(sorted(discovered_params)[:10]))
+
+        if not self._detected_cms and pages:
+            first_content = pages[0][2].lower()
+            first_gen = ''
+            gen_soup = BeautifulSoup(pages[0][2], 'html.parser', parse_only=SoupStrainer('meta'))
+            gen_meta = gen_soup.find('meta', {'name': 'generator'})
+            if gen_meta:
+                first_gen = gen_meta.get('content', '')
+            if 'MediaWiki' in first_gen or 'mediawiki' in first_content:
+                self._detected_cms = 'MediaWiki'
+            elif 'wp-content' in first_content or 'wordpress' in first_content:
+                self._detected_cms = 'WordPress'
+            elif 'joomla' in first_content:
+                self._detected_cms = 'Joomla'
+            elif 'drupal' in first_content:
+                self._detected_cms = 'Drupal'
+            if self._detected_cms:
+                logger.info("Detected CMS: %s", self._detected_cms)
 
         for url, status_code, content, headers in pages:
             if status_code != 200:
                 continue
             logger.debug("Scanning page: %s", url)
             soup = BeautifulSoup(content, 'html.parser', parse_only=SoupStrainer(['script', 'style', 'form', 'link']))
-            
+
             content_cleaned = content
             if soup.find(['script', 'style']):
                 for tag in soup(['script', 'style']):
@@ -728,7 +1016,7 @@ class WebVulnScanner:
 
             with ThreadPoolExecutor() as executor:
                 tasks = [
-                    (name, vuln_data, content if name in ['XSS', 'Cross-Site Script Inclusion (CSSI)', 'Cross-Domain Scripting', 'Cross-Site Request Forgery (CSRF)', 'Directory Traversal'] else content_cleaned, soup, url, headers)
+                    (name, vuln_data, content if name in ['XSS', 'Cross-Site Script Inclusion (CSSI)', 'Cross-Domain Scripting', 'Cross-Site Request Forgery (CSRF)', 'Directory Traversal'] else content_cleaned, soup, url, headers, discovered_params)
                     for name, vuln_data in self.vulnerabilities.items()
                 ]
                 try:
@@ -742,21 +1030,22 @@ class WebVulnScanner:
 
             for name, status, matches, detected_by, severity in results:
                 if name not in agg:
-                    agg[name] = [status, {}, detected_by, severity]  # change to dict for unique
+                    agg[name] = [status, {}, detected_by, severity]
                 if matches:
-                    agg[name][0] = status          # latest status
+                    agg[name][0] = status
                     for match in matches:
-                        key = (match[1], match[3])  # match_str, match_type
+                        key = (match[1], match[3] if len(match) > 3 else "Passive")
+                        poc = match[4] if len(match) > 4 else None
                         if key not in agg[name][1]:
-                            agg[name][1][key] = (match[0], match[1], match[2], match[3], 1)
+                            agg[name][1][key] = (match[0], match[1], match[2], match[3] if len(match) > 3 else "Passive", 1, poc)
                         else:
-                            # update if higher confidence, increment count
                             existing = agg[name][1][key]
+                            new_poc = poc if poc else existing[5]
                             if match[2] > existing[2]:
-                                agg[name][1][key] = (match[0], match[1], match[2], match[3], existing[4] + 1)
+                                agg[name][1][key] = (match[0], match[1], match[2], existing[3], existing[4] + 1, new_poc)
                             else:
-                                agg[name][1][key] = (existing[0], existing[1], existing[2], existing[3], existing[4] + 1)
-                    agg[name][2] = detected_by     # last method that actually found something
+                                agg[name][1][key] = (existing[0], existing[1], existing[2], existing[3], existing[4] + 1, new_poc)
+                    agg[name][2] = detected_by
                     agg[name][3] = severity
 
         for vuln, count in self.waf_block_counts.items():
@@ -766,6 +1055,296 @@ class WebVulnScanner:
             (name, status, list(matches.values()), detected_by, severity)
             for name, (status, matches, detected_by, severity) in agg.items()
         ]
+
+    def _probe_server_stack(self, target: str, content: str, headers: Dict[str, str]) -> Dict[str, Any]:
+        """Probe for PHP version, database, ICU version, Pygments via headers, API, and Special:Version."""
+        stack = {
+            'php_version': None,
+            'db_type': None,
+            'db_version': None,
+            'icu_version': None,
+            'pygments_version': None,
+            'lua_version': None,
+            'python_version': None,
+            'component_cves': [],
+        }
+
+        xpb = headers.get('X-Powered-By', '')
+        php_match = re.search(r'PHP[/ ]?(\d+\.\d+\.\d+)', xpb, re.IGNORECASE)
+        if php_match:
+            stack['php_version'] = php_match.group(1)
+
+        if not php_match:
+            php_match = re.search(r'PHP[/ ]?(\d+\.\d+\.\d+)', content)
+            if php_match:
+                stack['php_version'] = php_match.group(1)
+
+        is_mediawiki = self._detected_cms == 'MediaWiki' or 'mediawiki' in content.lower()
+
+        if is_mediawiki:
+            api_paths = ['/w/api.php', '/api.php', '/wiki/api.php']
+            for api_path in api_paths:
+                api_url = urljoin(target, api_path) + '?action=query&meta=siteinfo&siprop=general|extensions&format=json'
+                try:
+                    time.sleep(self.request_delay)
+                    resp = self.session.get(api_url, timeout=8, verify=self.verify_ssl)
+                    self._inc_requests()
+                    if resp.status_code == 200 and 'query' in resp.text:
+                        data = resp.json()
+                        general = data.get('query', {}).get('general', {})
+
+                        if not stack['php_version']:
+                            php_v = general.get('phpversion')
+                            if php_v:
+                                stack['php_version'] = php_v
+
+                        db_type = general.get('dbtype', '')
+                        db_version = general.get('dbversion', '')
+                        if db_type:
+                            stack['db_type'] = db_type
+                        if db_version:
+                            stack['db_version'] = db_version
+
+                        icu_v = general.get('icu-unicode-version') or general.get('icu-version')
+                        if not icu_v:
+                            icu_v = general.get('icuversion')
+                        if icu_v:
+                            stack['icu_version'] = icu_v
+
+                        extensions = data.get('query', {}).get('extensions', [])
+                        for ext in extensions:
+                            ext_name = ext.get('name', '').lower()
+                            if 'pygments' in ext_name or 'syntaxhighlight' in ext_name:
+                                ext_ver = ext.get('version')
+                                if ext_ver:
+                                    stack['pygments_version'] = ext_ver
+
+                        break
+                except Exception as e:
+                    logger.debug("API probe failed for %s: %s", api_path, e)
+
+            version_paths = ['/wiki/Special:Version', '/w/index.php?title=Special:Version', '/Special:Version']
+            for vp in version_paths:
+                try:
+                    version_url = urljoin(target, vp)
+                    time.sleep(self.request_delay)
+                    resp = self.session.get(version_url, timeout=8, verify=self.verify_ssl)
+                    self._inc_requests()
+                    if resp.status_code == 200 and 'PHP' in resp.text:
+                        vtext = resp.text
+
+                        if not stack['php_version']:
+                            m = re.search(r'PHP</a>\s*(\d+\.\d+\.\d+)', vtext) or re.search(r'PHP\s+(\d+\.\d+\.\d+)', vtext)
+                            if m:
+                                stack['php_version'] = m.group(1)
+
+                        if not stack['db_type']:
+                            m = re.search(r'(?:Database|Datenbank|Base de datos)[^<]*?:\s*(\w+)\s+([\d.]+)', vtext, re.IGNORECASE)
+                            if m:
+                                stack['db_type'] = m.group(1)
+                                stack['db_version'] = m.group(2)
+                            else:
+                                for db in ['MySQL', 'MariaDB', 'PostgreSQL', 'SQLite']:
+                                    m = re.search(rf'{db}\s+([\d.]+)', vtext)
+                                    if m:
+                                        stack['db_type'] = db
+                                        stack['db_version'] = m.group(1)
+                                        break
+
+                        if not stack['icu_version']:
+                            m = re.search(r'ICU\s+([\d.]+)', vtext)
+                            if m:
+                                stack['icu_version'] = m.group(1)
+
+                        if not stack['pygments_version']:
+                            m = re.search(r'[Pp]ygments\s+[Vv]?(?:ersion\s+)?([\d.]+)', vtext)
+                            if m:
+                                stack['pygments_version'] = m.group(1)
+
+                        if not stack['lua_version']:
+                            m = re.search(r'Lua\s+([\d.]+)', vtext)
+                            if m:
+                                stack['lua_version'] = m.group(1)
+
+                        if not stack['python_version']:
+                            m = re.search(r'Python\s+([\d.]+)', vtext)
+                            if m:
+                                stack['python_version'] = m.group(1)
+
+                        break
+                except Exception as e:
+                    logger.debug("Special:Version probe failed for %s: %s", vp, e)
+
+        return stack
+
+    def _map_component_cves(self, stack: Dict[str, Any]):
+        """Map detected component versions to known, version-specific CVEs with exploitability context.
+
+        Each CVE entry includes:
+          - severity: critical / high / medium / low
+          - exploitability: how reachable the issue is in a typical web deployment
+              remote-unauth    = exploitable by any web visitor
+              remote-auth      = requires authenticated session
+              local-only       = requires shell / DB / admin access
+              config-dependent = only if specific feature / extension is enabled
+          - fixed_in: version where the fix landed (for actionable guidance)
+        """
+        cves = stack['component_cves']
+
+        def _v(version_str):
+            try:
+                return tuple(int(x) for x in version_str.split('.'))
+            except (ValueError, AttributeError):
+                return ()
+
+        comp = lambda name, ver: f"{name} {ver}"
+
+        # ── PHP ──────────────────────────────────────────────────────────
+        if stack['php_version']:
+            pv = _v(stack['php_version'])
+            php_c = comp('PHP', stack['php_version'])
+            if pv:
+                if pv[:2] <= (8, 0):
+                    cves.append({'component': php_c, 'cve': 'EOL', 'severity': 'critical', 'exploitability': 'remote-unauth',
+                                 'description': 'PHP 8.0 and below are end-of-life — no security patches issued', 'fixed_in': 'Upgrade to 8.1+'})
+                # Branch-specific CVEs — only flag if the detected branch is actually affected
+                if pv[:2] == (8, 4) and pv < (8, 4, 21):
+                    cves.append({'component': php_c, 'cve': 'CVE-2025-14179', 'severity': 'high', 'exploitability': 'config-dependent',
+                                 'description': 'PDO Firebird SQL injection via NUL-byte truncation', 'fixed_in': '8.4.21'})
+                if pv[:2] == (8, 3) and pv < (8, 3, 21):
+                    cves.append({'component': php_c, 'cve': 'CVE-2025-14179', 'severity': 'high', 'exploitability': 'config-dependent',
+                                 'description': 'PDO Firebird SQL injection via NUL-byte truncation', 'fixed_in': '8.3.21'})
+                if pv[:2] == (8, 2) and pv < (8, 2, 28):
+                    cves.append({'component': php_c, 'cve': 'CVE-2024-11235', 'severity': 'critical', 'exploitability': 'remote-unauth',
+                                 'description': 'Request smuggling via stream HTTP wrapper', 'fixed_in': '8.2.28'})
+                if pv[:2] == (8, 1) and pv < (8, 1, 32):
+                    cves.append({'component': php_c, 'cve': 'CVE-2024-11235', 'severity': 'critical', 'exploitability': 'remote-unauth',
+                                 'description': 'Request smuggling via stream HTTP wrapper', 'fixed_in': '8.1.32'})
+                if pv[:2] == (8, 1) and pv < (8, 1, 30):
+                    cves.append({'component': php_c, 'cve': 'CVE-2024-8926', 'severity': 'critical', 'exploitability': 'config-dependent',
+                                 'description': 'CGI parameter injection (Windows CGI mode only)', 'fixed_in': '8.1.30'})
+                if pv[:2] == (8, 3) and pv < (8, 3, 14):
+                    cves.append({'component': php_c, 'cve': 'CVE-2024-9026', 'severity': 'medium', 'exploitability': 'local-only',
+                                 'description': 'PHP-FPM log manipulation — requires local log access', 'fixed_in': '8.3.14'})
+
+        # ── MediaWiki ────────────────────────────────────────────────────
+        mw_version = stack.get('_mediawiki_version')
+        if mw_version:
+            mv = _v(mw_version)
+            mw_c = comp('MediaWiki', mw_version)
+            if mv:
+                if mv[:2] == (1, 39):
+                    if mv < (1, 39, 15):
+                        cves.append({'component': mw_c, 'cve': 'CVE-2025-11261', 'severity': 'high', 'exploitability': 'remote-unauth',
+                                     'description': 'XSS in mediawiki.Language.Js i18n handling', 'fixed_in': '1.39.15'})
+                    if mv < (1, 39, 14):
+                        cves.append({'component': mw_c, 'cve': 'CVE-2025-67479', 'severity': 'high', 'exploitability': 'remote-auth',
+                                     'description': 'Parser sanitization flaw — potential RCE chain via Cite extension', 'fixed_in': '1.39.14'})
+                        cves.append({'component': mw_c, 'cve': 'CVE-2025-61646', 'severity': 'high', 'exploitability': 'remote-auth',
+                                     'description': 'EnhancedChangesList logic flaw — directory traversal / RCE-like impact', 'fixed_in': '1.39.14'})
+                        cves.append({'component': mw_c, 'cve': 'CVE-2025-61644', 'severity': 'medium', 'exploitability': 'remote-auth',
+                                     'description': 'Watchlist JS widget XSS', 'fixed_in': '1.39.14'})
+                    if mv < (1, 39, 12):
+                        cves.append({'component': mw_c, 'cve': 'CVE-2025-32072', 'severity': 'medium', 'exploitability': 'remote-unauth',
+                                     'description': 'Output escaping issue in feed generation', 'fixed_in': '1.39.12'})
+                    if mv < (1, 39, 5):
+                        cves.append({'component': mw_c, 'cve': 'CVE-2023-45360', 'severity': 'medium', 'exploitability': 'remote-auth',
+                                     'description': 'Stored XSS via i18n messages', 'fixed_in': '1.39.5'})
+                        cves.append({'component': mw_c, 'cve': 'CVE-2023-45362', 'severity': 'medium', 'exploitability': 'remote-auth',
+                                     'description': 'Information leak in diff engine', 'fixed_in': '1.39.5'})
+                if mv[:2] < (1, 39):
+                    cves.append({'component': mw_c, 'cve': 'EOL', 'severity': 'critical', 'exploitability': 'remote-unauth',
+                                 'description': 'MediaWiki branch is end-of-life — no security patches', 'fixed_in': 'Upgrade to 1.39 LTS or 1.42+'})
+
+        # ── MariaDB ──────────────────────────────────────────────────────
+        if stack['db_type'] and stack['db_version']:
+            db = stack['db_type'].lower()
+            dv = _v(stack['db_version'])
+            if dv:
+                if 'mariadb' in db:
+                    db_c = comp('MariaDB', stack['db_version'])
+                    if dv[:2] <= (10, 4):
+                        cves.append({'component': db_c, 'cve': 'EOL', 'severity': 'high', 'exploitability': 'local-only',
+                                     'description': 'MariaDB 10.4 and below are end-of-life', 'fixed_in': 'Upgrade to 10.5+ or 11.x'})
+                    if dv < (10, 5, 27) and dv[:2] == (10, 5):
+                        cves.append({'component': db_c, 'cve': 'CVE-2023-22084', 'severity': 'medium', 'exploitability': 'local-only',
+                                     'description': 'Optimizer DoS — requires authenticated DB session', 'fixed_in': '10.5.27'})
+                    if dv < (10, 6, 16) and dv[:2] == (10, 6):
+                        cves.append({'component': db_c, 'cve': 'CVE-2024-21096', 'severity': 'medium', 'exploitability': 'local-only',
+                                     'description': 'mysqldump improper validation — requires local tool access', 'fixed_in': '10.6.16'})
+                    # MariaDB 11.x / 12.x — no widely confirmed unpatched CVEs for default configs
+                    if dv[0] >= 11:
+                        cves.append({'component': db_c, 'cve': 'INFO', 'severity': 'info', 'exploitability': 'local-only',
+                                     'description': 'No widely confirmed unpatched CVEs for this version in default configurations. DB typically localhost-only — low remote attack surface.', 'fixed_in': 'N/A'})
+
+                elif 'mysql' in db:
+                    db_c = comp('MySQL', stack['db_version'])
+                    if dv[:2] < (8, 0):
+                        cves.append({'component': db_c, 'cve': 'EOL', 'severity': 'critical', 'exploitability': 'local-only',
+                                     'description': 'MySQL 5.x is end-of-life — no security patches', 'fixed_in': 'Upgrade to 8.0+'})
+                    if dv[:2] == (8, 0) and dv < (8, 0, 36):
+                        cves.append({'component': db_c, 'cve': 'CVE-2024-20960', 'severity': 'medium', 'exploitability': 'local-only',
+                                     'description': 'Server optimizer DoS — requires authenticated DB session', 'fixed_in': '8.0.36'})
+
+                elif 'postgres' in db:
+                    db_c = comp('PostgreSQL', stack['db_version'])
+                    if dv[0] < 13:
+                        cves.append({'component': db_c, 'cve': 'EOL', 'severity': 'high', 'exploitability': 'local-only',
+                                     'description': 'PostgreSQL version is end-of-life', 'fixed_in': 'Upgrade to 13+'})
+                    if dv < (16, 2) and dv[0] == 16:
+                        cves.append({'component': db_c, 'cve': 'CVE-2024-0985', 'severity': 'high', 'exploitability': 'local-only',
+                                     'description': 'REFRESH MATERIALIZED VIEW CONCURRENTLY privilege escalation — requires DB auth', 'fixed_in': '16.2'})
+
+                elif 'sqlite' in db:
+                    db_c = comp('SQLite', stack['db_version'])
+                    if dv < (3, 43, 2):
+                        cves.append({'component': db_c, 'cve': 'CVE-2023-7104', 'severity': 'high', 'exploitability': 'config-dependent',
+                                     'description': 'Heap buffer overflow in sessions extension — requires sessions extension enabled', 'fixed_in': '3.43.2'})
+
+        # ── ICU ──────────────────────────────────────────────────────────
+        if stack['icu_version']:
+            iv = _v(stack['icu_version'])
+            icu_c = comp('ICU', stack['icu_version'])
+            if iv:
+                if iv < (72,):
+                    cves.append({'component': icu_c, 'cve': 'CVE-2023-4004', 'severity': 'high', 'exploitability': 'config-dependent',
+                                 'description': 'OOB write in certain locale operations — requires specific locale processing paths', 'fixed_in': '72'})
+                if iv >= (74,):
+                    cves.append({'component': icu_c, 'cve': 'INFO', 'severity': 'info', 'exploitability': 'N/A',
+                                 'description': 'No major CVEs tied to this ICU version. ICU vulns typically affect older 60-70 range.', 'fixed_in': 'N/A'})
+                elif iv >= (72,):
+                    cves.append({'component': icu_c, 'cve': 'Advisory', 'severity': 'low', 'exploitability': 'config-dependent',
+                                 'description': 'ICU versions below 74 may lack some security hardening — low practical risk in web context', 'fixed_in': '74'})
+
+        # ── Pygments ─────────────────────────────────────────────────────
+        if stack['pygments_version']:
+            pgv = _v(stack['pygments_version'])
+            pg_c = comp('Pygments', stack['pygments_version'])
+            if pgv:
+                if pgv < (2, 7, 4):
+                    cves.append({'component': pg_c, 'cve': 'CVE-2021-20270', 'severity': 'medium', 'exploitability': 'config-dependent',
+                                 'description': 'Infinite loop in SML lexer — requires SML code highlighting by untrusted input', 'fixed_in': '2.7.4'})
+                if pgv < (2, 11, 0):
+                    cves.append({'component': pg_c, 'cve': 'CVE-2022-40896', 'severity': 'medium', 'exploitability': 'config-dependent',
+                                 'description': 'ReDoS in SQL lexers — requires SQL syntax highlighting of untrusted input', 'fixed_in': '2.11.0'})
+                if pgv < (2, 15, 0):
+                    cves.append({'component': pg_c, 'cve': 'CVE-2023-46216', 'severity': 'medium', 'exploitability': 'config-dependent',
+                                 'description': 'ReDoS in multiple lexers — exploitable if untrusted code is highlighted', 'fixed_in': '2.15.0'})
+                if pgv >= (2, 15, 0):
+                    cves.append({'component': pg_c, 'cve': 'INFO', 'severity': 'info', 'exploitability': 'N/A',
+                                 'description': 'No known CVEs. Pygments is not network-exposed in typical MediaWiki installs.', 'fixed_in': 'N/A'})
+
+        # ── Lua ──────────────────────────────────────────────────────────
+        if stack.get('lua_version'):
+            lv = _v(stack['lua_version'])
+            lua_c = comp('Lua', stack['lua_version'])
+            if lv:
+                if lv < (5, 4, 4):
+                    cves.append({'component': lua_c, 'cve': 'CVE-2022-33099', 'severity': 'medium', 'exploitability': 'config-dependent',
+                                 'description': 'Heap buffer overflow via crafted script — requires Scribunto/Lua module execution of untrusted input', 'fixed_in': '5.4.4'})
+                else:
+                    cves.append({'component': lua_c, 'cve': 'INFO', 'severity': 'info', 'exploitability': 'N/A',
+                                 'description': 'No known CVEs for this Lua version in sandboxed MediaWiki (Scribunto) context.', 'fixed_in': 'N/A'})
 
     def fingerprint(self, content: str, headers: Dict[str, str], target: str) -> Dict[str, Any]:
         """Generate a structured fingerprint of the target."""
@@ -793,7 +1372,8 @@ class WebVulnScanner:
             'sitemap_xml': 'Unknown',
             'ssl_enabled': False,
             'miscellaneous': [],
-            'hardening_tips': []
+            'hardening_tips': [],
+            'server_stack': {},
         }
         
         server_lower = fingerprint['server'].lower()
@@ -929,22 +1509,25 @@ class WebVulnScanner:
                 if (v_parts[0] == 1 and v_parts[1] == 35 and v_parts[2] >= 12) or \
                    (v_parts[0] == 1 and 36 <= v_parts[1] < 39) or \
                    (v_parts[0] == 1 and v_parts[1] == 39 and v_parts[2] < 5):
-                    fingerprint['known_vulns'].append({'description': "CVE-2023-45360: Stored XSS via i18n messages", 'detected_by': 'version'})
-                # CVE-2023-45362: 1.35.12, 1.36–1.39.x before 1.39.5
+                    fingerprint['known_vulns'].append({'description': "CVE-2023-45360: Potentially affected - Stored XSS via i18n messages (unconfirmed, version-based)", 'detected_by': 'version'})
                 if (v_parts[0] == 1 and v_parts[1] == 35 and v_parts[2] >= 12) or \
                    (v_parts[0] == 1 and 36 <= v_parts[1] < 39) or \
                    (v_parts[0] == 1 and v_parts[1] == 39 and v_parts[2] < 5):
-                    fingerprint['known_vulns'].append({'description': "CVE-2023-45362: Information leak in diff engine", 'detected_by': 'version'})
-                # Infinite loop: 1.39.x before 1.39.5
+                    fingerprint['known_vulns'].append({'description': "CVE-2023-45362: Potentially affected - Information leak in diff engine (unconfirmed, version-based)", 'detected_by': 'version'})
                 if v_parts[0] == 1 and v_parts[1] == 39 and v_parts[2] < 5:
-                    fingerprint['known_vulns'].append({'description': "Infinite loop on self-redirects with variants", 'detected_by': 'version'})
-                # API DDoS: 1.39.x
+                    fingerprint['known_vulns'].append({'description': "Potentially affected - Infinite loop on self-redirects with variants (unconfirmed, version-based)", 'detected_by': 'version'})
                 if v_parts[0] == 1 and v_parts[1] == 39:
-                    fingerprint['known_vulns'].append({'description': "API DDoS vulnerabilities (CVE-2025-61641, CVE-2025-61643, CVE-2025-61640)", 'detected_by': 'version'})
-                # Private wiki visibility leak: older versions
+                    fingerprint['known_vulns'].append({'description': "Potentially affected - API DDoS vulnerabilities CVE-2025-61641/61643/61640 (unconfirmed, version-based)", 'detected_by': 'version'})
                 if v_parts[0] == 1 and v_parts[1] < 39:
-                    fingerprint['known_vulns'].append({'description': "Private wiki visibility leak (CVE-2025-6590)", 'detected_by': 'version'})
+                    fingerprint['known_vulns'].append({'description': "Potentially affected - Private wiki visibility leak CVE-2025-6590 (unconfirmed, version-based)", 'detected_by': 'version'})
         
+        # Server stack probing (PHP, DB, ICU, Pygments)
+        stack = self._probe_server_stack(target, content, headers)
+        if fingerprint.get('mediawiki_version'):
+            stack['_mediawiki_version'] = fingerprint['mediawiki_version']
+        self._map_component_cves(stack)
+        fingerprint['server_stack'] = stack
+
         # Hardening tips
         if fingerprint['cms_guess'] == 'MediaWiki' and fingerprint['mediawiki_version'] and fingerprint['mediawiki_version'].startswith('1.39'):
             fingerprint['hardening_tips'].extend([
@@ -1003,29 +1586,29 @@ class WebVulnScanner:
         # Frontend Frameworks
         if 'data-reactroot' in content or '__REACT_DEVTOOLS_GLOBAL_HOOK__' in content:
             fingerprint['frontend_frameworks'].append('React')
-        if '__VUE_DEVTOOLS_GLOBAL_HOOK__' in content or 'v-' in content:
+        if '__VUE_DEVTOOLS_GLOBAL_HOOK__' in content or re.search(r'\bv-(?:if|for|bind|on|model|show|slot|cloak)\b', content):
             fingerprint['frontend_frameworks'].append('Vue')
         if 'ng-version' in content:
             fingerprint['frontend_frameworks'].append('Angular')
-        if 'svelte' in content_lower:
+        if 'svelte' in content_lower and any(s in content for s in ['__svelte', 'svelte-', 'SvelteComponent']):
             fingerprint['frontend_frameworks'].append('Svelte')
-        if 'x-data' in content or 'alpine' in content_lower:
+        if 'x-data=' in content or ('alpine' in content_lower and 'alpinejs' in content_lower):
             fingerprint['frontend_frameworks'].append('Alpine.js')
-        if 'ember' in content_lower:
+        if any(s in content for s in ['ember.js', 'ember.min.js', 'ember-application', '__EMBER_DEVTOOLS_GLOBAL_HOOK__', 'data-ember-action']):
             fingerprint['frontend_frameworks'].append('Ember.js')
-        if 'backbone' in content_lower:
+        if any(s in content for s in ['backbone.js', 'backbone.min.js', 'Backbone.Model', 'Backbone.View', 'Backbone.Router']):
             fingerprint['frontend_frameworks'].append('Backbone.js')
-        if 'polymer' in content_lower:
+        if any(s in content for s in ['polymer.html', 'polymer-element', 'polymer.js']):
             fingerprint['frontend_frameworks'].append('Polymer')
-        if 'mithril' in content_lower:
+        if any(s in content for s in ['mithril.js', 'mithril.min.js', 'm.render', 'm.mount']):
             fingerprint['frontend_frameworks'].append('Mithril')
-        if 'riot' in content_lower:
+        if any(s in content for s in ['riot.js', 'riot.min.js', 'riot.mount', 'data-riot']):
             fingerprint['frontend_frameworks'].append('Riot.js')
-        if 'aurelia' in content_lower:
+        if any(s in content for s in ['aurelia-', 'aurelia.js', 'aurelia-bootstrapper']):
             fingerprint['frontend_frameworks'].append('Aurelia')
         
-        # Ember-specific checks
-        if 'ember' in content_lower:
+        # Ember-specific checks (only if Ember was positively identified)
+        if 'Ember.js' in fingerprint['frontend_frameworks']:
             if '__EMBER_DEVTOOLS_GLOBAL_HOOK__' in content or 'ember-debug' in content_lower:
                 fingerprint['known_vulns'].append({'description': 'Ember Debug Tooling Exposed', 'detected_by': 'heuristic'})
             if '{{{unescaped' in content or '{{unescaped' in content:
@@ -1127,45 +1710,45 @@ class WebVulnScanner:
         jquery_match = re.search(r'jquery[/-](\d+\.\d+\.\d+)', content_lower)
         if jquery_match:
             fingerprint['miscellaneous'].append(f"jQuery {jquery_match.group(1)}")
-        if 'bootstrap' in content_lower:
+        if any(s in content_lower for s in ['bootstrap.min.css', 'bootstrap.min.js', 'bootstrap.css', 'bootstrap.js', 'bootstrap.bundle']):
             fingerprint['miscellaneous'].append('Bootstrap')
-        if 'tailwind' in content_lower:
+        if any(s in content_lower for s in ['tailwind.css', 'tailwindcss', 'tailwind.min.css']):
             fingerprint['miscellaneous'].append('Tailwind')
         if 'fonts.googleapis.com' in content_lower:
             fingerprint['miscellaneous'].append('Google Fonts')
-        if 'stripe' in content_lower:
+        if any(s in content_lower for s in ['stripe.com/v', 'stripe.js', 'js.stripe.com']):
             fingerprint['miscellaneous'].append('Stripe')
-        if 'paypal' in content_lower:
+        if any(s in content_lower for s in ['paypal.com/sdk', 'paypalobjects.com', 'paypal-button']):
             fingerprint['miscellaneous'].append('PayPal')
-        if 'braintree' in content_lower:
+        if any(s in content_lower for s in ['braintree-web', 'braintreegateway', 'braintree.js']):
             fingerprint['miscellaneous'].append('Braintree')
-        if 'font-awesome' in content_lower or 'fa-' in content_lower:
+        if 'font-awesome' in content_lower or any(s in content for s in ['fa fa-', 'fas fa-', 'far fa-', 'fab fa-', 'fontawesome']):
             fingerprint['miscellaneous'].append('Font Awesome')
-        if 'materialize' in content_lower:
+        if any(s in content_lower for s in ['materialize.min.css', 'materialize.min.js', 'materialize.css']):
             fingerprint['miscellaneous'].append('Materialize CSS')
-        if 'bulma' in content_lower:
+        if any(s in content_lower for s in ['bulma.css', 'bulma.min.css', 'bulma.io']):
             fingerprint['miscellaneous'].append('Bulma')
-        if 'foundation' in content_lower:
+        if any(s in content_lower for s in ['foundation.min.css', 'foundation.min.js', 'foundation.css']):
             fingerprint['miscellaneous'].append('Foundation')
-        if 'semantic-ui' in content_lower:
+        if 'semantic-ui' in content_lower or 'semantic.min' in content_lower:
             fingerprint['miscellaneous'].append('Semantic UI')
-        if 'uikit' in content_lower:
+        if any(s in content_lower for s in ['uikit.min', 'uikit.js', 'uikit.css']):
             fingerprint['miscellaneous'].append('UIkit')
-        if 'axios' in content_lower:
+        if any(s in content_lower for s in ['axios.min.js', 'axios.js', 'axios/']):
             fingerprint['miscellaneous'].append('Axios')
-        if 'lodash' in content_lower:
+        if any(s in content_lower for s in ['lodash.min.js', 'lodash.js', 'lodash/']):
             fingerprint['miscellaneous'].append('Lodash')
-        if 'moment' in content_lower:
+        if any(s in content_lower for s in ['moment.min.js', 'moment.js', 'moment/']):
             fingerprint['miscellaneous'].append('Moment.js')
-        if 'chart.js' in content_lower:
+        if 'chart.js' in content_lower or 'chart.min.js' in content_lower:
             fingerprint['miscellaneous'].append('Chart.js')
-        if 'd3' in content_lower:
+        if any(s in content for s in ['d3.js', 'd3.min.js', 'd3.v', 'd3.select', 'd3.scale', 'd3.svg']):
             fingerprint['miscellaneous'].append('D3.js')
-        if 'leaflet' in content_lower:
+        if any(s in content_lower for s in ['leaflet.js', 'leaflet.min.js', 'leaflet.css', 'l.tilelayer', 'l.map(']):
             fingerprint['miscellaneous'].append('Leaflet')
-        if 'mapbox' in content_lower:
+        if any(s in content_lower for s in ['mapbox-gl', 'api.mapbox.com', 'mapbox.js']):
             fingerprint['miscellaneous'].append('Mapbox')
-        if 'disqus' in content_lower:
+        if 'disqus.com' in content_lower or 'disqus_shortname' in content_lower:
             fingerprint['miscellaneous'].append('Disqus')
         if 'recaptcha' in content_lower:
             fingerprint['miscellaneous'].append('reCAPTCHA')
@@ -1185,7 +1768,52 @@ class WebVulnScanner:
         
         # SSL
         fingerprint['ssl_enabled'] = target.startswith('https://')
-        
+
+        # CORS Analysis
+        cors_issues = []
+        acao = headers.get('Access-Control-Allow-Origin', '')
+        acac = headers.get('Access-Control-Allow-Credentials', '').lower()
+        if acao == '*':
+            if acac == 'true':
+                cors_issues.append('CRITICAL: Access-Control-Allow-Origin: * with Allow-Credentials: true')
+            else:
+                cors_issues.append('Wildcard Access-Control-Allow-Origin (*)  - review if intentional')
+        elif acao and acao != 'Missing':
+            cors_issues.append(f'Access-Control-Allow-Origin set to: {acao}')
+        try:
+            cors_test_headers = {"User-Agent": self.current_user_agent, "Origin": "https://evil.example.com"}
+            cors_resp = self.session.get(target, headers=cors_test_headers, timeout=5, verify=self.verify_ssl)
+            self._inc_requests()
+            reflected_origin = cors_resp.headers.get('Access-Control-Allow-Origin', '')
+            if reflected_origin == 'https://evil.example.com':
+                cors_issues.append('CRITICAL: Origin reflection detected - server reflects arbitrary Origin header')
+            if cors_resp.headers.get('Access-Control-Allow-Credentials', '').lower() == 'true' and reflected_origin == 'https://evil.example.com':
+                cors_issues.append('CRITICAL: Reflected origin with credentials allowed - full CORS bypass')
+        except Exception:
+            pass
+        fingerprint['cors_issues'] = cors_issues
+
+        # Cookie Security Analysis
+        cookie_issues = []
+        set_cookies = headers.get('Set-Cookie', '')
+        if set_cookies:
+            cookies_raw = set_cookies if isinstance(set_cookies, list) else [set_cookies]
+            for cookie_str in cookies_raw:
+                cookie_name = cookie_str.split('=', 1)[0].strip() if '=' in cookie_str else cookie_str.split(';')[0].strip()
+                cookie_lower = cookie_str.lower()
+                issues = []
+                if 'httponly' not in cookie_lower:
+                    issues.append('missing HttpOnly')
+                if 'secure' not in cookie_lower:
+                    issues.append('missing Secure')
+                if 'samesite' not in cookie_lower:
+                    issues.append('missing SameSite')
+                elif 'samesite=none' in cookie_lower:
+                    issues.append('SameSite=None')
+                if issues:
+                    cookie_issues.append(f'{cookie_name}: {", ".join(issues)}')
+        fingerprint['cookie_issues'] = cookie_issues
+
         # Risk Score and Recommendations
         risk_score = 0
         recommendations = []
@@ -1204,6 +1832,27 @@ class WebVulnScanner:
         if not fingerprint['ssl_enabled']:
             risk_score += 20
             recommendations.append("Enforce HTTPS for all connections.")
+        if any('CRITICAL' in issue for issue in cors_issues):
+            risk_score += 20
+            recommendations.append("Fix CORS misconfiguration - do not reflect arbitrary origins or combine wildcard with credentials.")
+        elif cors_issues:
+            risk_score += 5
+        if cookie_issues:
+            risk_score += 10
+            recommendations.append("Set HttpOnly, Secure, and SameSite attributes on all cookies.")
+        component_cves = fingerprint.get('server_stack', {}).get('component_cves', [])
+        remote_critical = [c for c in component_cves if c.get('severity') == 'critical' and c.get('exploitability', '') in ('remote-unauth', 'remote-auth')]
+        remote_high = [c for c in component_cves if c.get('severity') == 'high' and c.get('exploitability', '') in ('remote-unauth', 'remote-auth')]
+        local_critical = [c for c in component_cves if c.get('severity') == 'critical' and c.get('exploitability', '') not in ('remote-unauth', 'remote-auth')]
+        if remote_critical:
+            risk_score += 25
+            recommendations.append(f"URGENT: {len(remote_critical)} remotely exploitable critical CVE(s) — update immediately.")
+        if remote_high:
+            risk_score += 15
+            recommendations.append(f"{len(remote_high)} remotely exploitable high-severity CVE(s) — plan updates soon.")
+        if local_critical:
+            risk_score += 10
+            recommendations.append(f"{len(local_critical)} critical CVE(s) requiring local/authenticated access — update when possible.")
         fingerprint['risk_score'] = min(risk_score, 100)
         fingerprint['recommendations'] = recommendations
         
@@ -1286,19 +1935,31 @@ class Reporter:
             if clean_ansi(status) == "Vulnerable" and matches:
                 print(f"\nVulnerability: {name}")
                 print("Matched Strings:")
-                for context, match, confidence, match_type, count in matches[:5]:
-                    display_match = match if len(match) <= 200 else match[:197] + "..."
-                    display_context = context if len(context) <= 120 else context[:117] + "..."
+                for m in matches[:5]:
+                    context_str = m[0]
+                    match_str = m[1]
+                    confidence = m[2]
+                    match_type = m[3]
+                    count = m[4]
+                    poc = m[5] if len(m) > 5 else None
+                    display_match = match_str if len(match_str) <= 200 else match_str[:197] + "..."
+                    display_context = context_str if len(context_str) <= 120 else context_str[:117] + "..."
                     note = ""
                     if name == "Directory Traversal" and match_type == "Passive":
                         note = "Likely safe relative path in HTML attribute"
-                    elif name == "Directory Traversal" and "WAF" in match:
+                    elif name == "Directory Traversal" and "WAF" in match_str:
                         note = "Possible false positive due to WAF block"
                     elif name == "Cross-Domain Scripting" and match_type == "Passive":
                         note = "Likely safe script source"
                     elif name == "Cross-Site Script Inclusion (CSSI)" and match_type == "Passive":
                         note = "Likely safe stylesheet source"
                     print(f"- {display_match} (Occurrences: {count}, Context: ...{display_context}..., Confidence: {confidence:.0%}, Type: {match_type}{', Note: ' + note if note else ''})")
+                    if poc and match_type == "Active":
+                        print(f"  {Fore.CYAN}PoC:{Style.RESET_ALL}")
+                        print(f"    curl:     {poc.get('curl', 'N/A')}")
+                        if poc.get('browser'):
+                            print(f"    browser:  {poc['browser']}")
+                        print(f"    evidence: {poc.get('evidence', 'N/A')}")
                 if len(matches) > 5:
                     print(f"... and {len(matches) - 5} more matches")
 
@@ -1307,36 +1968,30 @@ class Reporter:
     def export_results(self, results: List[Tuple[str, str, List[Tuple[str, str, float, str, int]], str, str]], output_file: str):
         """Export scan results to JSON or CSV."""
         if output_file.endswith('.json'):
-            data = [
-                {
+            data = []
+            for name, status, matches, detected_by, severity in results:
+                match_list = []
+                for m in matches:
+                    poc = m[5] if len(m) > 5 else None
+                    entry = {
+                        "context": m[0],
+                        "match": m[1],
+                        "confidence": m[2],
+                        "match_type": m[3],
+                        "occurrences": m[4],
+                    }
+                    if poc:
+                        entry["poc"] = poc
+                    match_list.append(entry)
+                data.append({
                     "Vulnerability": name,
                     "Status": clean_ansi(status),
                     "Confidence": f"{max([m[2] for m in matches] or [0]):.0%}" if matches else "N/A",
                     "MatchType": ", ".join(set(m[3] for m in matches)) if matches else "N/A",
                     "DetectedBy": detected_by,
                     "Severity": severity,
-                    "Matches": [
-                        (
-                            context,
-                            match,
-                            confidence,
-                            match_type,
-                            count,
-                            "Likely safe relative path in HTML attribute"
-                            if name == "Directory Traversal" and match_type == "Passive"
-                            else "Possible false positive due to WAF block"
-                            if name == "Directory Traversal" and "WAF" in match
-                            else "Likely safe script source"
-                            if name == "Cross-Domain Scripting" and match_type == "Passive"
-                            else "Likely safe stylesheet source"
-                            if name == "Cross-Site Script Inclusion (CSSI)" and match_type == "Passive"
-                            else ""
-                        )
-                        for context, match, confidence, match_type, count in matches
-                    ],
-                }
-                for name, status, matches, detected_by, severity in results
-            ]
+                    "Matches": match_list,
+                })
             with open(output_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2)
         elif output_file.endswith('.csv'):
@@ -1376,6 +2031,41 @@ class Reporter:
             print(f"- Drupal Version: {fingerprint['drupal_version']}")
         if fingerprint['mediawiki_version']:
             print(f"- MediaWiki Version: {fingerprint['mediawiki_version']}")
+        stack = fingerprint.get('server_stack', {})
+        if stack.get('php_version'):
+            print(f"- PHP Version: {stack['php_version']}")
+        if stack.get('db_type'):
+            db_str = stack['db_type']
+            if stack.get('db_version'):
+                db_str += f" {stack['db_version']}"
+            print(f"- Database: {db_str}")
+        if stack.get('icu_version'):
+            print(f"- ICU Version: {stack['icu_version']}")
+        if stack.get('pygments_version'):
+            print(f"- Pygments Version: {stack['pygments_version']}")
+        if stack.get('lua_version'):
+            print(f"- Lua Version: {stack['lua_version']}")
+        if stack.get('python_version'):
+            print(f"- Python Version: {stack['python_version']}")
+        if stack.get('component_cves'):
+            actionable = [c for c in stack['component_cves'] if c.get('severity') not in ('info',)]
+            informational = [c for c in stack['component_cves'] if c.get('severity') == 'info']
+            if actionable:
+                print(f"- Component CVEs ({len(actionable)} actionable):")
+                for cve_info in actionable:
+                    sev = cve_info.get('severity', 'medium')
+                    color = Fore.RED if sev == 'critical' else Fore.YELLOW if sev == 'high' else Fore.CYAN
+                    exploit = cve_info.get('exploitability', 'unknown')
+                    fixed = cve_info.get('fixed_in', '')
+                    fixed_str = f" | Fix: {fixed}" if fixed and fixed != 'N/A' else ''
+                    print(f"  - {color}[{sev.upper()}] {cve_info['component']} - {cve_info['cve']}: {cve_info['description']} [{exploit}]{fixed_str}{Style.RESET_ALL}")
+            if informational:
+                print(f"- Component Status ({len(informational)} clear):")
+                for cve_info in informational:
+                    print(f"  - {Fore.GREEN}[OK] {cve_info['component']}: {cve_info['description']}{Style.RESET_ALL}")
+        else:
+            print(f"- Component CVEs: No version data available for CVE mapping")
+
         if fingerprint['known_vulns']:
             print(f"- Known Vulnerabilities:")
             for vuln in fingerprint['known_vulns']:
@@ -1419,6 +2109,21 @@ class Reporter:
                 status = "Present" if value != 'Missing' else "Missing"
                 print(f"  - {header}: {status}")
         
+        if fingerprint.get('cors_issues'):
+            print(f"- CORS Issues:")
+            for issue in fingerprint['cors_issues']:
+                color = Fore.RED if 'CRITICAL' in issue else Fore.YELLOW
+                print(f"  - {color}{issue}{Style.RESET_ALL}")
+        else:
+            print(f"- CORS: No issues detected")
+
+        if fingerprint.get('cookie_issues'):
+            print(f"- Cookie Security Issues:")
+            for issue in fingerprint['cookie_issues']:
+                print(f"  - {Fore.YELLOW}{issue}{Style.RESET_ALL}")
+        else:
+            print(f"- Cookie Security: No issues detected")
+
         print(f"- SSL Enabled: {fingerprint['ssl_enabled']}")
         print(f"- Robots.txt: {fingerprint['robots_txt']}")
         if 'robots_disallowed' in fingerprint and fingerprint['robots_disallowed']:
